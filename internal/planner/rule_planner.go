@@ -101,6 +101,22 @@ func (p *RulePlanner) planOne(in string) agent.Step {
 		return agent.Step{Kind: agent.StepToolCall, Tool: "grep_repo", Args: args}
 	}
 
+	if strings.Contains(in, "天气") || strings.Contains(lo, "weather") {
+		args := map[string]any{}
+		// simple heuristic: remove "weather" or "天气" and use rest as location
+		// if "in Beijing", remove "in"
+		clean := in
+		clean = strings.ReplaceAll(clean, "weather", "")
+		clean = strings.ReplaceAll(clean, "天气", "")
+		clean = strings.ReplaceAll(clean, " in ", " ")
+		clean = strings.TrimSpace(clean)
+		if clean == "" {
+			clean = "Beijing" // default
+		}
+		args["location"] = clean
+		return agent.Step{Kind: agent.StepToolCall, Tool: "weather", Args: args}
+	}
+
 	if looksLikeExpr(in) {
 		return agent.Step{Kind: agent.StepToolCall, Tool: "calc", Args: map[string]any{"expr": in}}
 	}
@@ -132,6 +148,8 @@ func splitPrefix(in string) (tool string, rest string, ok bool) {
 		{"grep ", "grep_repo"},
 		{"search:", "grep_repo"},
 		{"search ", "grep_repo"},
+		{"weather:", "weather"},
+		{"weather ", "weather"},
 	} {
 		if strings.HasPrefix(l, prefix.p) {
 			return prefix.t, strings.TrimSpace(in[len(prefix.p):]), true
