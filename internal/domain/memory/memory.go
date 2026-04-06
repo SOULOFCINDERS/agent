@@ -1,3 +1,4 @@
+// Package memory defines the domain model for conversation memory entries.
 package memory
 
 import "time"

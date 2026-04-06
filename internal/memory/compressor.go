@@ -1,3 +1,4 @@
+// Package memory implements conversation memory storage with similarity search and context compression.
 package memory
 
 import (

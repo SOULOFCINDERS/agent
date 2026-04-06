@@ -1,3 +1,4 @@
+// Package structured implements the structured output engine for extracting typed data from LLM responses.
 package structured
 
 import (

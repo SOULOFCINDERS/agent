@@ -1,3 +1,4 @@
+// Package agent provides the core LoopAgent implementation that orchestrates LLM interactions with tool calling in an iterative loop.
 package agent
 
 import (

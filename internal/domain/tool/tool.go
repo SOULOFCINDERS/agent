@@ -1,3 +1,4 @@
+// Package tool defines domain models for tool error classification and handling.
 package tool
 
 import (

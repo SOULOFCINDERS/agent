@@ -1,3 +1,4 @@
+// Package ctxwindow defines domain interfaces for context window management strategies.
 package ctxwindow
 
 import (

@@ -1,3 +1,4 @@
+// Package ctxwindow implements context window management strategies including message compaction and token budget control.
 package ctxwindow
 
 import (

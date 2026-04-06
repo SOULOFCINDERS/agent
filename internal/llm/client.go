@@ -1,3 +1,4 @@
+// Package llm provides the LLM client implementation compatible with the OpenAI chat completions API.
 package llm
 
 import (

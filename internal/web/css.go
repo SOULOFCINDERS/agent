@@ -1,3 +1,4 @@
+// Package web implements the HTTP server for the Agent web interface with streaming chat support.
 package web
 
 func buildStyleCSS() string {

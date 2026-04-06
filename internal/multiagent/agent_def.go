@@ -1,3 +1,4 @@
+// Package multiagent implements multi-agent orchestration with handoff-based agent delegation.
 package multiagent
 
 import (

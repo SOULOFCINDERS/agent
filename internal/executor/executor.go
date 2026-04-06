@@ -1,3 +1,4 @@
+// Package executor implements the plan executor that runs tool calls and manages step-by-step execution.
 package executor
 
 import (

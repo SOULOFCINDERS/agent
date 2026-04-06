@@ -1,3 +1,4 @@
+// Package tools provides the built-in tool registry and implementations including calc, echo, read_file, shell and more.
 package tools
 
 import (

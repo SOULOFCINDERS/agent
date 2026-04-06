@@ -1,3 +1,4 @@
+// Package structured defines domain models for structured output extraction including Schema, Config and Extractor interface.
 package structured
 
 import (

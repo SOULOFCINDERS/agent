@@ -1,3 +1,4 @@
+// Package agentloop defines domain models for the agent execution loop including Plan, Step, Planner and Executor interfaces.
 package agentloop
 
 import (

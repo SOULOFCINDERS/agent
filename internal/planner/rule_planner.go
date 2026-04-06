@@ -1,3 +1,4 @@
+// Package planner implements rule-based planning that parses user input into structured execution plans.
 package planner
 
 import (
