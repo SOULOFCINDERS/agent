@@ -10,53 +10,25 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	conv "github.com/SOULOFCINDERS/agent/internal/domain/conversation"
 )
 
-// ---------- 通用类型 ----------
+// ---------- 类型别名：从 domain/conversation 引入 ----------
+// 保持向后兼容，所有 llm.Message、llm.ToolDef 等引用继续工作
 
-// ToolDef 描述一个工具，供 LLM function calling 使用
-type ToolDef struct {
-	Type     string   `json:"type"` // "function"
-	Function FuncDef  `json:"function"`
-}
-
-type FuncDef struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-}
-
-// Message 表示一条对话消息
-type Message struct {
-	Role       string      `json:"role"`                  // system / user / assistant / tool
-	Content    string      `json:"content,omitempty"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`  // assistant 返回的工具调用
-	ToolCallID string      `json:"tool_call_id,omitempty"` // role=tool 时必填
-}
-
-type ToolCall struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"` // "function"
-	Function FunctionCall `json:"function"`
-}
-
-type FunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"` // JSON string
-}
-
-// ChatResponse 表示 LLM 返回
-type ChatResponse struct {
-	Message      Message `json:"message"`
-	FinishReason string  `json:"finish_reason"` // "stop" / "tool_calls"
-	Usage        Usage   `json:"usage"`
-}
+type Message = conv.Message
+type ToolCall = conv.ToolCall
+type FunctionCall = conv.FunctionCall
+type ToolDef = conv.ToolDef
+type FuncDef = conv.FuncDef
+type ChatResponse = conv.ChatResponse
+type ResponseFormat = conv.ResponseFormat
+type ResponseJSONSchema = conv.ResponseJSONSchema
 
 // ---------- Client 接口 ----------
 
-type Client interface {
-	Chat(ctx context.Context, messages []Message, tools []ToolDef) (*ChatResponse, error)
-}
+type Client = conv.Client
 
 // ---------- OpenAI 兼容实现 ----------
 

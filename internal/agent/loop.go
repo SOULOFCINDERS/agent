@@ -27,7 +27,8 @@ type LoopAgent struct {
 	compressor   *memory.Compressor
 	retryTracker  *retryTracker
 	usageTracker *llm.UsageTracker
-	ctxManager   *ctxwindow.Manager // 上下文窗口管理器
+	ctxManager      *ctxwindow.Manager       // 上下文窗口管理器（基础）
+	smartCtxManager *ctxwindow.SmartManager  // 增强版上下文窗口管理器（支持摘要压缩）
 }
 
 func NewLoopAgent(client llm.Client, reg *tools.Registry, systemPrompt string, trace io.Writer, memStore *memory.Store, compressor *memory.Compressor) *LoopAgent {
@@ -182,10 +183,12 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 		}
 	}
 
-	// 上下文窗口管理：确保 history 不超出模型窗口
-	history = a.fitContextWindow(history)
+	// 上下文窗口管理已移入循环内（每次 LLM 调用前 PreCheck + 工具调用后 PostCheck）
 
 	for i := 0; i < maxIterations; i++ {
+		// LLM 调用前预检：确保 history 在窗口内（用户消息可能很长）
+		history = a.fitContextWindowWithCtx(ctx, history)
+
 		a.traceLog("iteration", map[string]any{"i": i, "messages": len(history)})
 
 		// 预算检查（调用前）
@@ -225,15 +228,40 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 		// 并发执行所有工具调用
 		history = a.executeToolCallsParallel(ctx, resp.Message.ToolCalls, history)
 
-		// 每轮工具调用后检查上下文窗口
-		history = a.fitContextWindow(history)
+		// 每轮工具调用后检查上下文窗口（工具结果可能很大）
+		history = a.fitContextWindowWithCtx(ctx, history)
 	}
 
 	return "", history, fmt.Errorf("reached maximum iterations (%d)", maxIterations)
 }
 
-// fitContextWindow 使用上下文窗口管理器裁剪历史
+// fitContextWindow 使用上下文窗口管理器裁剪历史（向后兼容）
 func (a *LoopAgent) fitContextWindow(history []llm.Message) []llm.Message {
+	return a.fitContextWindowWithCtx(context.Background(), history)
+}
+
+// fitContextWindowWithCtx 带 context 的裁剪
+// 优先使用 SmartManager（支持摘要压缩），降级到基础 Manager
+func (a *LoopAgent) fitContextWindowWithCtx(ctx context.Context, history []llm.Message) []llm.Message {
+	// 优先使用 SmartManager
+	if a.smartCtxManager != nil {
+		before := len(history)
+		result := a.smartCtxManager.SmartFit(ctx, history)
+
+		if result.FinalCount < before {
+			a.traceLog("smart_context_fit", map[string]any{
+				"messages_before":  before,
+				"messages_after":   result.FinalCount,
+				"tokens_before":    result.TokensBefore,
+				"tokens_after":     result.TokensAfter,
+				"strategy":         result.Strategy,
+				"summary_inserted": result.SummaryInserted,
+			})
+		}
+		return result.Messages
+	}
+
+	// 降级到基础 Manager
 	if a.ctxManager == nil {
 		return history
 	}
@@ -288,9 +316,20 @@ func (a *LoopAgent) SetUsageTracker(ut *llm.UsageTracker) {
 	a.usageTracker = ut
 }
 
-// SetContextManager 设置上下文窗口管理器
+// SetContextManager 设置上下文窗口管理器（基础版）
 func (a *LoopAgent) SetContextManager(mgr *ctxwindow.Manager) {
 	a.ctxManager = mgr
+}
+
+// SetSmartContextManager 设置增强版上下文窗口管理器（支持摘要压缩）
+// 设置后优先使用 SmartManager，忽略基础 Manager
+func (a *LoopAgent) SetSmartContextManager(mgr *ctxwindow.SmartManager) {
+	a.smartCtxManager = mgr
+}
+
+// GetSmartContextManager 获取增强版上下文窗口管理器
+func (a *LoopAgent) GetSmartContextManager() *ctxwindow.SmartManager {
+	return a.smartCtxManager
 }
 
 // GetContextManager 获取上下文窗口管理器

@@ -4,16 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"time"
+
+	al "github.com/SOULOFCINDERS/agent/internal/domain/agentloop"
 )
 
-type Planner interface {
-	Plan(ctx context.Context, input string) (Plan, error)
-}
+// ---------- 类型别名：从 domain/agentloop 引入 ----------
 
-type Executor interface {
-	Execute(ctx context.Context, plan Plan, trace io.Writer) (string, []TraceEvent, error)
-}
+type Planner = al.Planner
+type Executor = al.Executor
+type TraceEvent = al.TraceEvent
+
+// ---------- Agent 实现 ----------
 
 type Agent struct {
 	planner  Planner
@@ -33,15 +34,6 @@ func (a *Agent) Run(ctx context.Context, input string, trace io.Writer) (string,
 		return "", nil, err
 	}
 	return a.executor.Execute(ctx, plan, trace)
-}
-
-type TraceEvent struct {
-	At       time.Time `json:"at"`
-	Step     Step      `json:"step"`
-	Duration string    `json:"duration"`
-	OK       bool      `json:"ok"`
-	Result   any       `json:"result,omitempty"`
-	Error    string    `json:"error,omitempty"`
 }
 
 func WriteTraceEvent(w io.Writer, ev TraceEvent) {

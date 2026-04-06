@@ -1,19 +1,17 @@
 package agent
 
-type StepKind string
-
-const (
-	StepToolCall StepKind = "tool_call"
-	StepFinal    StepKind = "final"
+import (
+	al "github.com/SOULOFCINDERS/agent/internal/domain/agentloop"
 )
 
-type Step struct {
-	Kind StepKind       `json:"kind"`
-	Tool string         `json:"tool,omitempty"`
-	Args map[string]any `json:"args,omitempty"`
-	Text string         `json:"text,omitempty"`
-}
+// ---------- 类型别名：从 domain/agentloop 引入 ----------
 
-type Plan struct {
-	Steps []Step `json:"steps"`
-}
+type StepKind = al.StepKind
+
+const (
+	StepToolCall = al.StepToolCall
+	StepFinal    = al.StepFinal
+)
+
+type Step = al.Step
+type Plan = al.Plan

@@ -10,20 +10,7 @@ import (
 )
 
 // ---------- Structured Output: response_format 支持 ----------
-
-// ResponseFormat OpenAI 兼容的 response_format
-type ResponseFormat struct {
-	Type       string              `json:"type"`                  // "json_schema" | "json_object" | "text"
-	JSONSchema *ResponseJSONSchema `json:"json_schema,omitempty"` // type=json_schema 时必填
-}
-
-// ResponseJSONSchema response_format.json_schema 部分
-type ResponseJSONSchema struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Strict      bool            `json:"strict"`
-	Schema      json.RawMessage `json:"schema"`
-}
+// ResponseFormat 和 ResponseJSONSchema 已在 client.go 中通过别名从 domain/conversation 引入
 
 // chatRequestWithFormat 带 response_format 的请求体
 type chatRequestWithFormat struct {

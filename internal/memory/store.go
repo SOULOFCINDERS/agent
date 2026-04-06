@@ -11,20 +11,15 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	dmem "github.com/SOULOFCINDERS/agent/internal/domain/memory"
 )
 
-// Entry 是一条记忆
-type Entry struct {
-	ID        string    `json:"id"`
-	Topic     string    `json:"topic"`               // 主题/标签
-	Content   string    `json:"content"`              // 记忆内容
-	Keywords  []string  `json:"keywords,omitempty"`   // 用于检索的关键词
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	AccessCnt int       `json:"access_cnt"`           // 访问次数（用于排序）
-}
+// ---------- 类型别名：从 domain/memory 引入 ----------
 
-// Store 是记忆的持久化存储
+type Entry = dmem.Entry
+
+// Store 是记忆的持久化存储（具体实现）
 type Store struct {
 	mu       sync.RWMutex
 	entries  []Entry
@@ -33,7 +28,6 @@ type Store struct {
 }
 
 // NewStore 创建/加载一个记忆存储
-// dataDir 为存储目录，会在其中创建 memory.json
 func NewStore(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("create memory dir: %w", err)
@@ -52,7 +46,6 @@ func NewStore(dataDir string) (*Store, error) {
 		if err := json.Unmarshal(data, &entries); err == nil {
 			s.entries = entries
 			for _, e := range entries {
-				// 解析 ID 数字部分，确保 nextID 不冲突
 				var n int
 				if _, err := fmt.Sscanf(e.ID, "mem_%d", &n); err == nil && n >= s.nextID {
 					s.nextID = n + 1
@@ -132,7 +125,6 @@ func (s *Store) Search(query string, limit int) []Entry {
 		results = results[:limit]
 	}
 
-	// 更新访问计数
 	out := make([]Entry, len(results))
 	for i, r := range results {
 		out[i] = r.entry
@@ -150,7 +142,6 @@ func (s *Store) List(limit int) []Entry {
 		limit = len(s.entries)
 	}
 
-	// 按更新时间倒序
 	sorted := make([]Entry, len(s.entries))
 	copy(sorted, s.entries)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -198,12 +189,10 @@ func (s *Store) Summary(maxEntries int) string {
 		maxEntries = 20
 	}
 
-	// 按 访问次数 + 最近更新 综合排序
 	sorted := make([]Entry, len(s.entries))
 	copy(sorted, s.entries)
 	now := time.Now()
 	sort.Slice(sorted, func(i, j int) bool {
-		// 最近更新的 + 访问多的排前面
 		si := float64(sorted[i].AccessCnt) + 10.0/math.Max(1, now.Sub(sorted[i].UpdatedAt).Hours()+1)
 		sj := float64(sorted[j].AccessCnt) + 10.0/math.Max(1, now.Sub(sorted[j].UpdatedAt).Hours()+1)
 		return si > sj
@@ -221,6 +210,25 @@ func (s *Store) Summary(maxEntries int) string {
 	return b.String()
 }
 
+// RelevantSummary 根据当前查询返回相关记忆的摘要
+func (s *Store) RelevantSummary(query string, maxEntries int) string {
+	if maxEntries <= 0 {
+		maxEntries = 5
+	}
+
+	results := s.Search(query, maxEntries)
+	if len(results) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("与当前对话相关的记忆（共 %d/%d 条）：\n", len(results), s.Count()))
+	for _, e := range results {
+		b.WriteString(fmt.Sprintf("- [%s] %s\n", e.Topic, e.Content))
+	}
+	return b.String()
+}
+
 // --- 内部方法 ---
 
 func (s *Store) save() {
@@ -232,8 +240,6 @@ func (s *Store) save() {
 }
 
 func (s *Store) touchEntry(id string) {
-	// 注意：调用者应已持有至少 RLock，这里需要升级为写锁
-	// 简化处理：异步更新
 	go func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -252,7 +258,6 @@ func (s *Store) touchEntry(id string) {
 func tokenize(s string) []string {
 	s = strings.ToLower(s)
 	var words []string
-	// 按空格和标点分词
 	for _, w := range strings.FieldsFunc(s, func(r rune) bool {
 		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r >= 0x4e00)
 	}) {
@@ -260,7 +265,6 @@ func tokenize(s string) []string {
 			words = append(words, w)
 		}
 	}
-	// 对中文，按单字拆分（简单 unigram/bigram）
 	var cjk []string
 	for _, w := range words {
 		runes := []rune(w)
@@ -286,12 +290,10 @@ func relevanceScore(e Entry, queryWords []string, rawQuery string) float64 {
 	topicLower := strings.ToLower(e.Topic)
 	allText := topicLower + " " + contentLower + " " + strings.ToLower(strings.Join(e.Keywords, " "))
 
-	// 完整查询匹配
 	if strings.Contains(allText, rawQuery) {
 		score += 5.0
 	}
 
-	// 逐词匹配
 	for _, w := range queryWords {
 		if utf8.RuneCountInString(w) < 1 {
 			continue
@@ -310,26 +312,4 @@ func relevanceScore(e Entry, queryWords []string, rawQuery string) float64 {
 	}
 
 	return score
-}
-
-// RelevantSummary 根据当前查询返回相关记忆的摘要
-// 与 Summary 不同，它基于 query 相关性检索，只注入真正相关的记忆
-// 这样可以大幅减少 token 消耗
-func (s *Store) RelevantSummary(query string, maxEntries int) string {
-	if maxEntries <= 0 {
-		maxEntries = 5
-	}
-
-	// 使用已有的 Search 方法进行相关性检索
-	results := s.Search(query, maxEntries)
-	if len(results) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("与当前对话相关的记忆（共 %d/%d 条）：\n", len(results), s.Count()))
-	for _, e := range results {
-		b.WriteString(fmt.Sprintf("- [%s] %s\n", e.Topic, e.Content))
-	}
-	return b.String()
 }

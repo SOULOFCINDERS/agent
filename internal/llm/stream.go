@@ -9,29 +9,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	conv "github.com/SOULOFCINDERS/agent/internal/domain/conversation"
 )
 
-// ---------- Streaming 类型 ----------
+// ---------- 类型别名：从 domain/conversation 引入 ----------
 
-// StreamDelta 表示一个流式增量
-type StreamDelta struct {
-	Content      string          // 文本增量
-	ToolCalls    []ToolCallDelta // 工具调用增量
-	Done         bool            // 是否结束
-	FinishReason string          // stop / tool_calls
-	Usage        *Usage          // 最后一个 chunk 可能包含 usage
-}
-
-// ToolCallDelta 工具调用的增量（SSE 中分多次传递）
-type ToolCallDelta struct {
-	Index    int    `json:"index"`
-	ID       string `json:"id,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Function struct {
-		Name      string `json:"name,omitempty"`
-		Arguments string `json:"arguments,omitempty"`
-	} `json:"function,omitempty"`
-}
+type StreamDelta = conv.StreamDelta
+type ToolCallDelta = conv.ToolCallDelta
 
 // StreamReader 用于逐 chunk 读取流式响应
 type StreamReader struct {

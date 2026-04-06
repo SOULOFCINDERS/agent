@@ -2,62 +2,25 @@ package agent
 
 import (
 	"fmt"
+
+	dtool "github.com/SOULOFCINDERS/agent/internal/domain/tool"
 )
 
-// ToolErrorKind 工具错误类型分类
-type ToolErrorKind int
+// ---------- 类型别名：从 domain/tool 引入 ----------
 
-const (
-	// ErrRetryable 可重试错误：参数格式不对、JSON 解析失败等
-	ErrRetryable ToolErrorKind = iota
-	// ErrNotRetryable 不可重试错误：权限不足、资源不存在等
-	ErrNotRetryable
-	// ErrTimeout 超时错误
-	ErrTimeout
-	// ErrPanic 工具内部 panic
-	ErrPanic
-	// ErrUnknownTool 工具不存在
-	ErrUnknownTool
+type ToolErrorKind = dtool.ErrorKind
+type ToolError = dtool.Error
+
+// 常量别名
+var (
+	ErrRetryable    = dtool.ErrRetryable
+	ErrNotRetryable = dtool.ErrNotRetryable
+	ErrTimeout      = dtool.ErrTimeout
+	ErrPanic        = dtool.ErrPanic
+	ErrUnknownTool  = dtool.ErrUnknownTool
 )
-
-func (k ToolErrorKind) String() string {
-	switch k {
-	case ErrRetryable:
-		return "retryable"
-	case ErrNotRetryable:
-		return "not_retryable"
-	case ErrTimeout:
-		return "timeout"
-	case ErrPanic:
-		return "panic"
-	case ErrUnknownTool:
-		return "unknown_tool"
-	default:
-		return "unknown"
-	}
-}
-
-// ToolError 结构化工具错误
-type ToolError struct {
-	Kind    ToolErrorKind
-	Tool    string // 工具名
-	Message string // 错误信息
-	Cause   error  // 原始错误
-}
-
-func (e *ToolError) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("[%s] %s: %s (cause: %v)", e.Kind, e.Tool, e.Message, e.Cause)
-	}
-	return fmt.Sprintf("[%s] %s: %s", e.Kind, e.Tool, e.Message)
-}
-
-func (e *ToolError) Unwrap() error {
-	return e.Cause
-}
 
 // classifyError 将原始 error 分类为 ToolError
-// 通过错误信息中的关键词判断类别
 func classifyError(toolName string, err error) *ToolError {
 	if err == nil {
 		return nil
@@ -88,11 +51,11 @@ func classifyError(toolName string, err error) *ToolError {
 		return &ToolError{Kind: ErrNotRetryable, Tool: toolName, Message: msg, Cause: err}
 	}
 
-	// 默认：可重试（给 LLM 一次机会修正）
+	// 默认：可重试
 	return &ToolError{Kind: ErrRetryable, Tool: toolName, Message: msg, Cause: err}
 }
 
-// containsAny 检查 s 是否包含 substrs 中的任意一个（不区分大小写）
+// containsAny 检查 s 是否包含 substrs 中的任意一个
 func containsAny(s string, substrs ...string) bool {
 	lower := toLower(s)
 	for _, sub := range substrs {
@@ -127,7 +90,7 @@ func contains(s, substr string) bool {
 	return false
 }
 
-// formatErrorForLLM 生成结构化错误信息，帮助 LLM 理解错误并修正
+// formatErrorForLLM 生成结构化错误信息
 func formatErrorForLLM(te *ToolError, retryCount, maxRetries int) string {
 	var hint string
 

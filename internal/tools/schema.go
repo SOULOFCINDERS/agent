@@ -2,13 +2,7 @@ package tools
 
 import "encoding/json"
 
-// ToolSchema 为工具提供 function calling schema
-// 实现此接口的工具可以暴露给 LLM
-type ToolWithSchema interface {
-	Tool
-	Description() string
-	ParameterSchema() json.RawMessage
-}
+// ToolWithSchema 已通过别名从 domain/tool 引入（见 registry.go）
 
 // BuiltinSchemas 返回所有内置工具的 schema 定义
 // 不需要每个工具都实现接口，这里集中定义

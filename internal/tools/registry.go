@@ -1,15 +1,17 @@
 package tools
 
 import (
-	"context"
 	"sync"
+
+	dtool "github.com/SOULOFCINDERS/agent/internal/domain/tool"
 )
 
-type Tool interface {
-	Name() string
-	Execute(ctx context.Context, args map[string]any) (any, error)
-}
+// ---------- 类型别名：从 domain/tool 引入 ----------
 
+type Tool = dtool.Tool
+type ToolWithSchema = dtool.ToolWithSchema
+
+// Registry 工具注册表（具体实现，满足 domain/tool.Registry 接口）
 type Registry struct {
 	mu    sync.RWMutex
 	tools map[string]Tool
