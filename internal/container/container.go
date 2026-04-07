@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/SOULOFCINDERS/agent/internal/agent"
+	"github.com/SOULOFCINDERS/agent/internal/guardrail"
 	"github.com/SOULOFCINDERS/agent/internal/ctxwindow"
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 	"github.com/SOULOFCINDERS/agent/internal/memory"
@@ -30,6 +31,7 @@ type Config struct {
 	SearchMode     bool
 	MemoryMode     bool
 	MultiAgentMode bool
+	GuardrailMode  bool
 	StreamMode     bool
 
 	// 路径与地址
@@ -38,7 +40,9 @@ type Config struct {
 	Addr   string // Web 服务监听地址
 
 	// 资源配置
-	Budget    int64 // Token 预算（0=无限制）
+	Budget         int64                  // Token 预算（0=无限制）
+	BlockKeywords  []guardrail.KeywordRule // 敏感词规则（可选）
+	MaxInputChars  int                     // 输入最大字符数（0=不限）
 	CtxWindow int   // 上下文窗口大小覆盖
 
 	// 运行时
@@ -59,6 +63,8 @@ type App struct {
 	LoopAgent      *agent.LoopAgent
 	Orchestrator   *multiagent.Orchestrator
 	TraceWriter    io.Writer
+
+	Guardrails *guardrail.GuardPipeline
 
 	Config Config
 }
@@ -132,13 +138,23 @@ func Build(cfg Config) (*App, error) {
 	// 5. Token 用量追踪
 	app.UsageTracker = llm.NewUsageTracker(cfg.Budget)
 
-	// 6. LoopAgent
+	// 6. Guardrails（可选）
+	if cfg.GuardrailMode {
+		app.Guardrails = guardrail.DefaultPipeline(cfg.BlockKeywords, cfg.MaxInputChars)
+	}
+
+	// 7. LoopAgent
 	app.LoopAgent = agent.NewLoopAgent(
 		app.LLMClient, app.Registry, cfg.SystemPrompt,
 		cfg.TraceWriter, app.MemStore, app.Compressor,
 	)
 
-	// 7. 上下文窗口管理
+	// 7.1 注入 Guardrails
+	if app.Guardrails != nil {
+		app.LoopAgent.SetGuardrails(app.Guardrails)
+	}
+
+	// 8. 上下文窗口管理
 	var modelName string
 	if oai, ok := app.LLMClient.(*llm.OpenAICompatClient); ok {
 		modelName = oai.Model
@@ -155,7 +171,7 @@ func Build(cfg Config) (*App, error) {
 	app.LoopAgent.SetContextManager(ctxMgr)
 	app.LoopAgent.SetUsageTracker(app.UsageTracker)
 
-	// 8. Multi-Agent（可选）
+	// 9. Multi-Agent（可选）
 	if cfg.MultiAgentMode {
 		agentDefs := []multiagent.AgentDef{
 			multiagent.ResearchAgentDef(),

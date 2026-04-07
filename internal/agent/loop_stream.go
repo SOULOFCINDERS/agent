@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/SOULOFCINDERS/agent/internal/llm"
+	gd "github.com/SOULOFCINDERS/agent/internal/domain/guardrail"
 )
 
 // StreamWriter 定义流式输出回调
@@ -27,6 +28,23 @@ func (a *LoopAgent) ChatStream(ctx context.Context, userMessage string, history 
 		Role:    "user",
 		Content: userMessage,
 	})
+
+
+	// Guardrail: 输入安全检查
+	if a.guardrails != nil {
+		gr := a.guardrails.Run(ctx, gd.PhaseInput, userMessage)
+		switch gr.Action {
+		case gd.ActionBlock:
+			a.traceLog("guardrail_block", map[string]any{"guard": gr.GuardName, "phase": "input", "reason": gr.BlockReason})
+			if onDelta != nil {
+				onDelta(gr.BlockReason)
+			}
+			return gr.BlockReason, history, nil
+		case gd.ActionRedact:
+			a.traceLog("guardrail_redact", map[string]any{"guard": gr.GuardName, "phase": "input", "violations": len(gr.Violations)})
+			history[len(history)-1] = llm.Message{Role: "user", Content: gr.RedactedContent}
+		}
+	}
 
 	// 注入相关记忆（基于当前查询，而非全量注入）
 	if a.memStore != nil && a.memStore.Count() > 0 {
@@ -163,9 +181,22 @@ func (a *LoopAgent) ChatStream(ctx context.Context, userMessage string, history 
 			}
 			sr.Close()
 
-			msg := llm.Message{Role: "assistant", Content: fullContent}
+			finalContent := fullContent
+			// Guardrail: 输出安全检查 (stream)
+			if a.guardrails != nil {
+				gr := a.guardrails.Run(ctx, gd.PhaseOutput, finalContent)
+				switch gr.Action {
+				case gd.ActionBlock:
+					a.traceLog("guardrail_block", map[string]any{"guard": gr.GuardName, "phase": "output"})
+					finalContent = "抱歉，生成的内容未通过安全检查，请换个方式提问"
+				case gd.ActionRedact:
+					a.traceLog("guardrail_redact", map[string]any{"guard": gr.GuardName, "phase": "output", "violations": len(gr.Violations)})
+					finalContent = gr.RedactedContent
+				}
+			}
+			msg := llm.Message{Role: "assistant", Content: finalContent}
 			history = append(history, msg)
-			a.traceLog("final_answer_stream", map[string]any{"content_len": len(fullContent)})
+			a.traceLog("final_answer_stream", map[string]any{"content_len": len(finalContent)})
 			if a.usageTracker != nil {
 				a.traceLog("token_usage_summary", map[string]any{"cumulative": a.usageTracker.TotalTokens()})
 			}

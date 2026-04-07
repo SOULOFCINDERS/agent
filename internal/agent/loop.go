@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/SOULOFCINDERS/agent/internal/ctxwindow"
+	gd "github.com/SOULOFCINDERS/agent/internal/domain/guardrail"
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 	"github.com/SOULOFCINDERS/agent/internal/memory"
 	"github.com/SOULOFCINDERS/agent/internal/tools"
@@ -29,6 +30,7 @@ type LoopAgent struct {
 	usageTracker *llm.UsageTracker
 	ctxManager      *ctxwindow.Manager       // 上下文窗口管理器（基础）
 	smartCtxManager *ctxwindow.SmartManager  // 增强版上下文窗口管理器（支持摘要压缩）
+	guardrails      gd.Pipeline              // 安全检查管道（可选）
 }
 
 func NewLoopAgent(client llm.Client, reg *tools.Registry, systemPrompt string, trace io.Writer, memStore *memory.Store, compressor *memory.Compressor) *LoopAgent {
@@ -155,6 +157,20 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 		Content: userMessage,
 	})
 
+
+	// Guardrail: 输入安全检查
+	if a.guardrails != nil {
+		gr := a.guardrails.Run(ctx, gd.PhaseInput, userMessage)
+		switch gr.Action {
+		case gd.ActionBlock:
+			a.traceLog("guardrail_block", map[string]any{"guard": gr.GuardName, "phase": "input", "reason": gr.BlockReason})
+			return gr.BlockReason, history, nil
+		case gd.ActionRedact:
+			a.traceLog("guardrail_redact", map[string]any{"guard": gr.GuardName, "phase": "input", "violations": len(gr.Violations)})
+			history[len(history)-1] = llm.Message{Role: "user", Content: gr.RedactedContent}
+		}
+	}
+
 	// 注入相关记忆（基于当前查询，而非全量注入）
 	if a.memStore != nil && a.memStore.Count() > 0 {
 		memSummary := a.memStore.RelevantSummary(userMessage, 5)
@@ -221,8 +237,22 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 
 		// 如果没有工具调用，返回最终文本
 		if len(resp.Message.ToolCalls) == 0 {
-			a.traceLog("final_answer", map[string]any{"content_len": len(resp.Message.Content)})
-			return resp.Message.Content, history, nil
+			finalContent := resp.Message.Content
+			// Guardrail: 输出安全检查
+			if a.guardrails != nil {
+				gr := a.guardrails.Run(ctx, gd.PhaseOutput, finalContent)
+				switch gr.Action {
+				case gd.ActionBlock:
+					a.traceLog("guardrail_block", map[string]any{"guard": gr.GuardName, "phase": "output", "reason": gr.BlockReason})
+					return "抱歉，生成的内容未通过安全检查，请换个方式提问", history, nil
+				case gd.ActionRedact:
+					a.traceLog("guardrail_redact", map[string]any{"guard": gr.GuardName, "phase": "output", "violations": len(gr.Violations)})
+					finalContent = gr.RedactedContent
+					history[len(history)-1] = llm.Message{Role: "assistant", Content: finalContent}
+				}
+			}
+			a.traceLog("final_answer", map[string]any{"content_len": len(finalContent)})
+			return finalContent, history, nil
 		}
 
 		// 并发执行所有工具调用
@@ -299,6 +329,11 @@ func (a *LoopAgent) traceLog(event string, data map[string]any) {
 	}
 	b, _ := json.Marshal(entry)
 	_, _ = fmt.Fprintf(a.trace, "%s\n", b)
+}
+
+// SetGuardrails 设置安全检查管道
+func (a *LoopAgent) SetGuardrails(p gd.Pipeline) {
+	a.guardrails = p
 }
 
 // GetClient 返回内部的 LLM 客户端（用于类型断言检查能力）

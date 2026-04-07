@@ -37,12 +37,14 @@ go run ./cmd/agent web --mock --addr :8080  # 启动 Web UI
 | `internal/usecase/structuredoutput/` | Usecase | 结构化输出提取 | domain/* + infrastructure |
 | `internal/presenter/cli/` | Presenter | CLI 交互层 | usecase/* + domain/* |
 | `internal/presenter/web/` | Presenter | Web HTTP 服务 | usecase/* + domain/* |
+| `internal/domain/guardrail/` | Domain | Guard/Pipeline 接口、Action/Phase 值对象 | 仅标准库 |
 | `internal/container/` | Container | DI 依赖装配 | 全部内部包 |
 | `internal/llm/` | Infrastructure | OpenAI 兼容 LLM 客户端实现 | domain/conversation |
 | `internal/tools/` | Infrastructure | 具体工具实现 (echo, calc, read_file...) | domain/tool |
 | `internal/memory/` | Infrastructure | JSON 文件持久化记忆存储 | domain/memory |
 | `internal/agent/` | Infrastructure | LoopAgent 对话循环实现 | domain/* + llm + tools |
 | `internal/ctxwindow/` | Infrastructure | 上下文窗口裁剪实现 | domain/ctxwindow |
+| `internal/guardrail/` | Infrastructure | 安全检查实现 (PII/关键词/注入/长度) | domain/guardrail |
 | `internal/structured/` | Infrastructure | 结构化输出引擎实现 | domain/structured |
 | `cmd/agent/` | Entry | CLI 入口，参数解析 | container + presenter |
 
@@ -90,6 +92,21 @@ func (m Message) IsSystemMessage() bool
 app, err := container.Build(cfg)
 chatAgent := app.ChatAgent()
 ```
+
+
+### Guardrail 安全检查
+Harness 层在 3 个阶段执行安全检查，通过 `gd.Pipeline` 链式调用：
+- **PhaseInput** — 用户输入进入 LLM 前
+- **PhaseOutput** — LLM 输出返回用户前
+- **PhaseToolResult** — 工具执行结果反馈 LLM 前
+
+内置 Guard:
+- `PromptInjectionGuard` — 检测 prompt 注入攻击 → Block
+- `PIIGuard` — 检测手机/身份证/邮箱/银行卡/IP → Redact
+- `KeywordGuard` — 敏感词过滤 → Block 或 Redact
+- `LengthGuard` — 输入长度限制 → Block
+
+启用方式：`container.Config{GuardrailMode: true}`
 
 ## 新增功能指南
 
