@@ -287,3 +287,40 @@ agent chat --rag --rag-dir /path/to/index
 - 检索到相关内容时标注"基于已索引知识"
 
 **测试**：`go test ./internal/rag/... -v`（18 个测试覆盖全部组件 + 批量导入）
+
+### Web UI (图形界面)
+
+**架构**: Go 嵌入式前端，所有 HTML/JS/CSS 通过 Go 字符串编译进二进制。
+
+| 文件 | 职责 |
+|------|------|
+| `internal/web/server.go` | HTTP 路由、SSE 流式、会话管理、API 端点 |
+| `internal/web/html.go` | HTML 模板（header + 上下文面板 + 聊天容器 + 输入区） |
+| `internal/web/js.go` | 前端 JS（SSE 客户端、消息渲染、Markdown 解析、上下文用量更新） |
+| `internal/web/css.go` | 样式（暗色主题、响应式、进度条动画） |
+| `internal/web/static.go` | `init()` 拼接静态资源 |
+
+**API 端点**：
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `/api/chat` | POST | 非流式对话 |
+| `/api/chat/stream` | POST | SSE 流式对话 |
+| `/api/sessions/clear` | POST | 清空会话 |
+| `/api/status` | GET | 系统状态（会话数、记忆数） |
+| `/api/context` | GET | 上下文窗口 + Token 用量详情 |
+
+**上下文用量面板**（v2 新增）：
+- 上下文窗口进度条：实时显示已用/总容量 tokens，颜色随使用率变化（绿→黄→橙→红）
+- Token 用量网格：总计/输入/输出/调用次数
+- 预算显示：设置 token 预算时显示使用百分比
+- SSE `context` 事件：每次对话完成后自动推送上下文信息，无需额外轮询
+- 可折叠：顶栏图表按钮切换显示/隐藏
+
+**SSE 事件类型**：
+| 事件 | 数据 | 说明 |
+|------|------|------|
+| `session` | session_id | 会话标识 |
+| `delta` | text | 流式文本增量 |
+| `context` | JSON | 上下文窗口 + Token 用量（每次对话结束推送） |
+| `done` | full_text | 对话完成 |
+| `error` | error_msg | 错误信息 |

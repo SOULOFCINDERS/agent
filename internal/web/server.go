@@ -87,6 +87,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/api/chat/stream", s.handleChatStream)
 	mux.HandleFunc("/api/sessions/clear", s.handleClearSession)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/context", s.handleContext)
 
 	log.Printf("🌐 Agent Web UI starting at http://localhost%s", s.addr)
 	return http.ListenAndServe(s.addr, withCORS(mux))
@@ -124,6 +125,28 @@ type chatResponse struct {
 	Reply     string `json:"reply"`
 	SessionID string `json:"session_id"`
 	Error     string `json:"error,omitempty"`
+}
+
+// contextInfo 上下文窗口和 Token 用量信息
+type contextInfo struct {
+	// 上下文窗口
+	MaxInputTokens  int     `json:"max_input_tokens"`
+	EstimatedTokens int     `json:"estimated_tokens"`
+	UsagePercent    float64 `json:"usage_percent"`
+	RemainingTokens int     `json:"remaining_tokens"`
+	MessageCount    int     `json:"message_count"`
+	HasRoom         bool    `json:"has_room"`
+
+	// 累计 Token 用量
+	TotalTokens      int64 `json:"total_tokens"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	CallCount        int64 `json:"call_count"`
+	Budget           int64 `json:"budget"`
+	BudgetRemaining  int64 `json:"budget_remaining"`
+
+	// 模型信息
+	ModelName string `json:"model_name,omitempty"`
 }
 
 // handleChat 非流式对话
@@ -225,6 +248,12 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.setSession(req.SessionID, newHistory)
+
+		// 发送上下文信息（在 done 之前）
+		ctxData := s.buildContextInfo(req.SessionID)
+		ctxJSON, _ := json.Marshal(ctxData)
+		sendSSE(w, flusher, "context", string(ctxJSON))
+
 		sendSSE(w, flusher, "done", reply)
 	} else {
 		// 降级：非流式
@@ -236,6 +265,12 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 		s.setSession(req.SessionID, newHistory)
 		sendSSE(w, flusher, "delta", reply)
+
+		// 发送上下文信息（在 done 之前）
+		ctxData := s.buildContextInfo(req.SessionID)
+		ctxJSON, _ := json.Marshal(ctxData)
+		sendSSE(w, flusher, "context", string(ctxJSON))
+
 		sendSSE(w, flusher, "done", reply)
 	}
 }
@@ -275,6 +310,55 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"sessions": sessionCount,
 		"memories": memCount,
 	})
+}
+
+// handleContext 返回指定会话的上下文窗口和 token 用量信息
+func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session_id")
+	ctxData := s.buildContextInfo(sessionID)
+	writeJSON(w, 200, ctxData)
+}
+
+// buildContextInfo 构建上下文信息
+func (s *Server) buildContextInfo(sessionID string) contextInfo {
+	info := contextInfo{}
+
+	// 上下文窗口状态
+	if sessionID != "" {
+		history := s.getSession(sessionID)
+		ws := s.loopAgent.ContextWindowStatus(history)
+		if ws != nil {
+			info.MaxInputTokens = ws.MaxInputTokens
+			info.EstimatedTokens = ws.EstimatedTokens
+			info.UsagePercent = ws.UsagePercent
+			info.RemainingTokens = ws.RemainingTokens
+			info.MessageCount = ws.MessageCount
+			info.HasRoom = ws.HasRoom
+		}
+	}
+
+	// 如果没有上下文窗口管理器，提供基于消息数的基础估算
+	if info.MaxInputTokens == 0 {
+		ctxMgr := s.loopAgent.GetContextManager()
+		if ctxMgr != nil {
+			cfg := ctxMgr.Config()
+			info.MaxInputTokens = cfg.MaxInputTokens
+			info.ModelName = cfg.Model.Name
+		}
+	}
+
+	// Token 用量
+	ut := s.loopAgent.GetUsageTracker()
+	if ut != nil {
+		info.TotalTokens = ut.TotalTokens()
+		info.PromptTokens = ut.PromptTokens()
+		info.CompletionTokens = ut.CompletionTokens()
+		info.CallCount = ut.CallCount()
+		info.Budget = ut.Budget()
+		info.BudgetRemaining = ut.Remaining()
+	}
+
+	return info
 }
 
 // ---------- 会话管理 ----------

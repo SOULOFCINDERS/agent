@@ -18,6 +18,7 @@ func buildStyleCSS() string {
     --agent-bg: #1e1e1e;
     --success: #4caf50;
     --error: #ef5350;
+    --warning: #ff9800;
     --radius: 12px;
 }
 
@@ -46,6 +47,7 @@ body {
     background: var(--surface);
 }
 .header-left { display: flex; align-items: center; gap: 12px; }
+.header-right { display: flex; align-items: center; gap: 8px; }
 .header h1 { font-size: 18px; font-weight: 600; }
 .status-badge {
     font-size: 11px; padding: 3px 8px; border-radius: 10px;
@@ -57,6 +59,85 @@ body {
 .btn-ghost { background: transparent; color: var(--text-dim); }
 .btn-ghost:hover { background: var(--surface2); color: var(--text); }
 
+/* ---- Context Status Bar ---- */
+.context-bar {
+    display: flex;
+    gap: 16px;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    align-items: stretch;
+    min-height: 72px;
+}
+.ctx-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.ctx-section:first-child { flex: 1.4; }
+.ctx-divider {
+    width: 1px;
+    background: var(--border);
+    align-self: stretch;
+}
+.ctx-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--text-dim);
+    font-weight: 500;
+}
+.ctx-ratio { color: var(--text); font-variant-numeric: tabular-nums; }
+.ctx-budget { color: var(--warning); font-size: 11px; }
+
+/* Progress bar */
+.ctx-progress-track {
+    width: 100%;
+    height: 6px;
+    background: var(--surface2);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.ctx-progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    width: 0%;
+    transition: width 0.6s ease, background-color 0.4s ease;
+}
+.ctx-progress-fill.level-ok { background: var(--success); }
+.ctx-progress-fill.level-warn { background: #ffc107; }
+.ctx-progress-fill.level-high { background: var(--warning); }
+.ctx-progress-fill.level-critical { background: var(--error); }
+
+.ctx-meta {
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-dim);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Token grid */
+.ctx-token-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+}
+.ctx-token-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 0;
+    background: var(--surface2);
+    border-radius: 6px;
+}
+.ctx-token-label { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+.ctx-token-value { color: var(--text); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---- Chat Container ---- */
 .chat-container {
     flex: 1;
     overflow-y: auto;
@@ -145,6 +226,9 @@ body {
     .msg-content { max-width: 88%; }
     .header h1 { font-size: 16px; }
     .quick-actions { flex-direction: column; align-items: center; }
+    .context-bar { flex-direction: column; gap: 10px; min-height: auto; }
+    .ctx-divider { width: 100%; height: 1px; }
+    .ctx-section:first-child { flex: 1; }
 }
 `
 }

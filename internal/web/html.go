@@ -17,9 +17,52 @@ func buildIndexHTML() string {
                 <span class="status-badge" id="statusBadge">connecting...</span>
             </div>
             <div class="header-right">
+                <button class="btn btn-ghost" id="toggleStats" title="显示/隐藏用量面板">&#x1f4ca;</button>
                 <button class="btn btn-ghost" id="clearBtn" title="清空对话">&#x1f5d1;&#xfe0f; 清空</button>
             </div>
         </header>
+
+        <div class="context-bar" id="contextBar">
+            <div class="ctx-section">
+                <div class="ctx-label">
+                    <span>上下文窗口</span>
+                    <span class="ctx-ratio" id="ctxRatio">0 / 0 tokens</span>
+                </div>
+                <div class="ctx-progress-track">
+                    <div class="ctx-progress-fill" id="ctxProgressFill"></div>
+                </div>
+                <div class="ctx-meta">
+                    <span id="ctxPercent">0%</span>
+                    <span id="ctxMessages">0 条消息</span>
+                    <span id="ctxRemaining">剩余 0 tokens</span>
+                </div>
+            </div>
+            <div class="ctx-divider"></div>
+            <div class="ctx-section">
+                <div class="ctx-label">
+                    <span>Token 用量</span>
+                    <span class="ctx-budget" id="ctxBudget"></span>
+                </div>
+                <div class="ctx-token-grid">
+                    <div class="ctx-token-item">
+                        <span class="ctx-token-label">总计</span>
+                        <span class="ctx-token-value" id="tkTotal">0</span>
+                    </div>
+                    <div class="ctx-token-item">
+                        <span class="ctx-token-label">输入</span>
+                        <span class="ctx-token-value" id="tkPrompt">0</span>
+                    </div>
+                    <div class="ctx-token-item">
+                        <span class="ctx-token-label">输出</span>
+                        <span class="ctx-token-value" id="tkCompletion">0</span>
+                    </div>
+                    <div class="ctx-token-item">
+                        <span class="ctx-token-label">调用</span>
+                        <span class="ctx-token-value" id="tkCalls">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <main class="chat-container" id="chatContainer">
             <div class="welcome-msg">
