@@ -447,6 +447,9 @@ func printStartupInfo(app *container.App) {
 	if app.Orchestrator != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "🤝 Multi-Agent 模式已启用\n")
 	}
+	if cfg.StreamMode {
+		_, _ = fmt.Fprintln(os.Stderr, "🌊 Streaming V2 已启用 (工具状态实时显示)")
+	}
 }
 
 
@@ -591,8 +594,25 @@ func runChatLoopWithSession(ca container.ChatAgent, streamMode bool, usageTracke
 
 		if streamMode {
 			_, _ = fmt.Fprint(os.Stdout, "\nAgent: ")
-			reply, newHistory, err := ca.ChatStream(ctx, input, history, func(delta string) {
-				_, _ = fmt.Fprint(os.Stdout, delta)
+			reply, newHistory, err := ca.ChatStreamV2(ctx, input, history, func(event agent.StreamEvent) {
+				switch event.Type {
+				case agent.EventDelta:
+					_, _ = fmt.Fprint(os.Stdout, event.Content)
+				case agent.EventToolStart:
+					_, _ = fmt.Fprintf(os.Stderr, "\n  🔧 %s(%s)\n", event.ToolName, truncateArgs(event.ToolArgs, 60))
+				case agent.EventToolEnd:
+					if event.ToolError != "" {
+						_, _ = fmt.Fprintf(os.Stderr, "  ❌ %s (%dms)\n", event.ToolError, event.Duration)
+					} else {
+						_, _ = fmt.Fprintf(os.Stderr, "  ✅ done (%dms)\n", event.Duration)
+					}
+				case agent.EventIteration:
+					if event.Iteration > 1 {
+						_, _ = fmt.Fprintf(os.Stderr, "  ⟳ 轮次 %d/%d\n", event.Iteration, event.MaxIter)
+					}
+				case agent.EventStatus:
+					_, _ = fmt.Fprintf(os.Stderr, "  ⏳ %s\n", event.Status)
+				}
 			})
 			cancel()
 			if err != nil {
@@ -626,4 +646,13 @@ func runChatLoopWithSession(ca container.ChatAgent, streamMode bool, usageTracke
 	}
 
 	return 0
+}
+
+
+// truncateArgs 截断工具参数用于 CLI 显示
+func truncateArgs(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }

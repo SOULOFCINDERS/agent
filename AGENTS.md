@@ -324,3 +324,67 @@ agent chat --rag --rag-dir /path/to/index
 | `context` | JSON | 上下文窗口 + Token 用量（每次对话结束推送） |
 | `done` | full_text | 对话完成 |
 | `error` | error_msg | 错误信息 |
+
+### Streaming V2 (结构化流式输出)
+
+增强流式架构，提供实时可视化的 Agent 循环全过程 — 不仅传递文本增量，还包括工具执行事件、迭代进度、思考过程和状态变更。
+
+**核心类型** (`internal/agent/stream_event.go`)：
+```go
+type StreamEventType string  // "delta" | "tool_start" | "tool_end" | "iteration" | "thinking" | "status"
+type StreamEvent struct {
+    Type       StreamEventType // 事件类型
+    Content    string          // delta 文本内容
+    ToolCallID string          // 工具调用 ID
+    ToolName   string          // 工具名称
+    ToolArgs   string          // 工具参数 JSON
+    ToolResult string          // 工具执行结果
+    ToolError  string          // 工具错误信息
+    Duration   int64           // 执行耗时(ms)
+    Iteration  int             // 当前轮次
+    MaxIter    int             // 最大轮次
+    Thinking   string          // 思考过程文本
+    Status     string          // 状态描述
+}
+type StreamEventWriter func(event StreamEvent)
+```
+
+**向后兼容**：
+- `AsEventWriter(legacy StreamWriter) StreamEventWriter` — 将旧的 `func(string)` 回调包装为 `StreamEventWriter`，仅转发 `EventDelta`
+- `ChatStream` 保持不变，`ChatStreamV2` 是新增方法
+
+**Agent 循环** (`internal/agent/loop_stream_v2.go`)：
+- `ChatStreamV2` — 增强版流式对话，发射结构化事件
+- `executeToolCallsWithEvents` — 串行执行工具（非并行），保证 `tool_start → tool_end` 事件配对
+- 复用 `executeOneToolSafe`（30s 超时、panic 恢复、重试追踪、错误分类）
+- 每个迭代发射 `EventIteration`，工具执行前后发射 `EventToolStart`/`EventToolEnd`
+- 错误检测：`[TOOL_ERROR ` 前缀判断工具执行是否失败
+
+**SSE 事件类型（V2 扩展）**：
+| 事件 | 数据 | 说明 |
+|------|------|------|
+| `tool_start` | JSON (tool_call_id, tool_name, tool_args) | 工具开始执行 |
+| `tool_end` | JSON (tool_call_id, tool_name, tool_result/tool_error, duration) | 工具执行完成 |
+| `iteration` | JSON (iteration, max_iter) | 新一轮 Agent 循环 |
+| `thinking` | text | LLM 思考/推理过程 |
+| `status` | text | 状态变更（"调用工具中..."、"等待模型响应..."） |
+
+**Web UI 工具卡片**：
+- 实时展示工具执行状态：运行中（蓝色脉冲）、完成（绿色）、错误（红色）
+- 可折叠的详情面板：参数预览（前 3 个 key）、结果展示、执行耗时
+- `createToolCard()` / `updateToolCard()` 函数管理卡片生命周期
+- 工具用 🛠️ 图标区分于 🤖 文本消息
+
+**CLI 工具状态显示** (`cmd/agent/main.go`)：
+```
+🔧 read_file({"path":"main.go"})      # 工具开始
+✅ done (150ms)                        # 工具完成
+❌ file not found (30ms)               # 工具失败
+⟳ 轮次 2/10                           # 迭代进度
+⏳ 调用工具中...                       # 状态变更
+```
+
+**关键设计决策**：
+- 串行工具执行（vs 并行）：保证前端事件配对可预测，牺牲并发换取 UX 一致性
+- 独立新方法（vs 修改旧方法）：`ChatStreamV2` 与 `ChatStream` 并存，零破坏性变更
+- 工具参数截断：`truncateForEvent()` 限制 200 字符，避免大参数冲击 SSE

@@ -15,6 +15,9 @@ func buildAppJS() string {
     var isStreaming = false;
     var statsVisible = true;
 
+    // 工具调用状态追踪
+    var activeToolCards = {};
+
     checkStatus();
     messageInput.focus();
 
@@ -55,7 +58,6 @@ func buildAppJS() string {
     function updateContextInfo(data) {
         if (!data) return;
 
-        // 上下文窗口进度条
         var percent = 0;
         if (data.max_input_tokens > 0) {
             percent = Math.min(data.usage_percent * 100, 100);
@@ -64,7 +66,6 @@ func buildAppJS() string {
         var fillEl = document.getElementById('ctxProgressFill');
         fillEl.style.width = percent.toFixed(1) + '%';
 
-        // 进度条颜色：绿→黄→橙→红
         if (percent < 50) {
             fillEl.className = 'ctx-progress-fill level-ok';
         } else if (percent < 75) {
@@ -82,13 +83,11 @@ func buildAppJS() string {
         document.getElementById('ctxRemaining').textContent =
             '\\u5269\\u4f59 ' + formatNumber(data.remaining_tokens) + ' tokens';
 
-        // Token 用量
         document.getElementById('tkTotal').textContent = formatNumber(data.total_tokens);
         document.getElementById('tkPrompt').textContent = formatNumber(data.prompt_tokens);
         document.getElementById('tkCompletion').textContent = formatNumber(data.completion_tokens);
         document.getElementById('tkCalls').textContent = data.call_count || 0;
 
-        // 预算
         var budgetEl = document.getElementById('ctxBudget');
         if (data.budget > 0) {
             var budgetPct = (data.total_tokens / data.budget * 100).toFixed(1);
@@ -107,16 +106,93 @@ func buildAppJS() string {
         return String(n);
     }
 
-    async function fetchContextInfo() {
-        if (!sessionId) return;
-        try {
-            var resp = await fetch('/api/context?session_id=' + encodeURIComponent(sessionId));
-            var data = await resp.json();
-            updateContextInfo(data);
-        } catch (e) {
-            // 静默失败
+    // ---- 工具调用卡片 ----
+
+    function createToolCard(data) {
+        var card = document.createElement('div');
+        card.className = 'tool-card running';
+        card.id = 'tool-' + data.tool_call_id;
+
+        var header = document.createElement('div');
+        header.className = 'tool-card-header';
+        header.innerHTML =
+            '<span class="tool-icon">\\u2699\\ufe0f</span>' +
+            '<span class="tool-name">' + escapeHtml(data.tool_name) + '</span>' +
+            '<span class="tool-status-badge running">\\u8fd0\\u884c\\u4e2d...</span>';
+
+        var body = document.createElement('div');
+        body.className = 'tool-card-body';
+        body.style.display = 'none';
+
+        // 参数预览
+        if (data.tool_args && data.tool_args !== '{}') {
+            var argsDiv = document.createElement('div');
+            argsDiv.className = 'tool-args';
+            try {
+                var parsed = JSON.parse(data.tool_args);
+                var keys = Object.keys(parsed);
+                var preview = keys.slice(0, 3).map(function(k) {
+                    var v = String(parsed[k]);
+                    if (v.length > 60) v = v.substring(0, 60) + '...';
+                    return '<span class="tool-arg-key">' + escapeHtml(k) + '</span>: ' + escapeHtml(v);
+                }).join('<br>');
+                if (keys.length > 3) preview += '<br><span class="tool-arg-more">+' + (keys.length - 3) + ' more</span>';
+                argsDiv.innerHTML = '<div class="tool-section-label">\\u53c2\\u6570</div>' + preview;
+            } catch(e) {
+                argsDiv.innerHTML = '<div class="tool-section-label">\\u53c2\\u6570</div>' + escapeHtml(data.tool_args);
+            }
+            body.appendChild(argsDiv);
+        }
+
+        // 结果区（待填充）
+        var resultDiv = document.createElement('div');
+        resultDiv.className = 'tool-result';
+        resultDiv.style.display = 'none';
+        body.appendChild(resultDiv);
+
+        // 点击展开/折叠
+        header.addEventListener('click', function() {
+            if (body.style.display === 'none') {
+                body.style.display = 'block';
+            } else {
+                body.style.display = 'none';
+            }
+        });
+
+        card.appendChild(header);
+        card.appendChild(body);
+        return card;
+    }
+
+    function updateToolCard(data) {
+        var card = document.getElementById('tool-' + data.tool_call_id);
+        if (!card) return;
+
+        card.className = data.tool_error ? 'tool-card error' : 'tool-card done';
+
+        // 更新状态
+        var badge = card.querySelector('.tool-status-badge');
+        if (badge) {
+            if (data.tool_error) {
+                badge.className = 'tool-status-badge error';
+                badge.textContent = '\\u5931\\u8d25';
+            } else {
+                badge.className = 'tool-status-badge done';
+                badge.textContent = data.duration + 'ms';
+            }
+        }
+
+        // 填充结果
+        var resultDiv = card.querySelector('.tool-result');
+        if (resultDiv && data.tool_result) {
+            resultDiv.style.display = 'block';
+            var label = data.tool_error ? '\\u9519\\u8bef' : '\\u7ed3\\u679c';
+            resultDiv.innerHTML = '<div class="tool-section-label">' + label + '</div>' +
+                '<pre class="tool-result-pre">' + escapeHtml(data.tool_result) + '</pre>';
         }
     }
+
+    // ---- 消息发送 ----
 
     window.sendQuick = function(text) {
         messageInput.value = text;
@@ -135,6 +211,7 @@ func buildAppJS() string {
         messageInput.style.height = 'auto';
         isStreaming = true;
         sendBtn.disabled = true;
+        activeToolCards = {};
 
         var thinkingEl = appendThinking();
 
@@ -164,6 +241,7 @@ func buildAppJS() string {
         var buffer = '';
         var agentContent = '';
         var agentEl = null;
+        var toolsContainer = null;
 
         while (true) {
             var chunk = await reader.read();
@@ -197,17 +275,84 @@ func buildAppJS() string {
             }
         }
 
+        function ensureToolsContainer() {
+            if (!toolsContainer) {
+                toolsContainer = document.createElement('div');
+                toolsContainer.className = 'tools-container';
+                var wrapper = document.createElement('div');
+                wrapper.className = 'message agent';
+                wrapper.innerHTML = '<div class="msg-avatar">\\ud83d\\udee0\\ufe0f</div>';
+                wrapper.appendChild(toolsContainer);
+                chatContainer.appendChild(wrapper);
+            }
+            return toolsContainer;
+        }
+
         function handleEvent(event, data) {
             if (event === 'session') {
                 sessionId = data;
             } else if (event === 'delta') {
                 if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
-                if (!agentEl) agentEl = appendMessage('agent', '');
+                // 如果之前有工具调用，开始新的 agent 文本消息
+                if (!agentEl) {
+                    agentEl = appendMessage('agent', '');
+                    toolsContainer = null; // 新消息轮
+                }
                 agentContent += data;
                 updateMessageContent(agentEl, agentContent);
                 scrollToBottom();
+            } else if (event === 'tool_start') {
+                if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
+                try {
+                    var toolData = JSON.parse(data);
+                    var container = ensureToolsContainer();
+                    var card = createToolCard(toolData);
+                    container.appendChild(card);
+                    activeToolCards[toolData.tool_call_id] = card;
+                    scrollToBottom();
+                } catch (e) {}
+            } else if (event === 'tool_end') {
+                try {
+                    var toolData = JSON.parse(data);
+                    updateToolCard(toolData);
+                    scrollToBottom();
+                } catch (e) {}
+            } else if (event === 'iteration') {
+                // 迭代事件：更新 thinking 提示
+                try {
+                    var iterData = JSON.parse(data);
+                    if (thinkingEl && thinkingEl.parentNode) {
+                        var thinkDiv = thinkingEl.querySelector('.thinking');
+                        if (thinkDiv && iterData.iteration > 1) {
+                            thinkDiv.innerHTML =
+                                '<div class="thinking-dots"><span></span><span></span><span></span></div>' +
+                                ' thinking... (\\u8f6e\\u6b21 ' + iterData.iteration + '/' + iterData.max_iter + ')';
+                        }
+                    }
+                } catch (e) {}
+            } else if (event === 'status') {
+                // 状态事件：更新 thinking 文本
+                if (thinkingEl && thinkingEl.parentNode) {
+                    var thinkDiv = thinkingEl.querySelector('.thinking');
+                    if (thinkDiv) {
+                        var statusText = data === 'calling_tools' ? '\\u8c03\\u7528\\u5de5\\u5177\\u4e2d...' :
+                                        data === 'waiting_llm' ? '\\u7b49\\u5f85\\u6a21\\u578b\\u54cd\\u5e94...' : data;
+                        thinkDiv.innerHTML =
+                            '<div class="thinking-dots"><span></span><span></span><span></span></div>' +
+                            ' ' + statusText;
+                    }
+                }
+            } else if (event === 'thinking') {
+                // 思考过程（reasoning model）
+                if (thinkingEl && thinkingEl.parentNode) {
+                    var thinkDiv = thinkingEl.querySelector('.thinking');
+                    if (thinkDiv) {
+                        thinkDiv.innerHTML =
+                            '<div class="thinking-dots"><span></span><span></span><span></span></div>' +
+                            ' <span class="thinking-text">' + escapeHtml(data).substring(0, 100) + '</span>';
+                    }
+                }
             } else if (event === 'context') {
-                // 收到上下文信息，解析并更新 UI
                 try {
                     var ctxData = JSON.parse(data);
                     updateContextInfo(ctxData);
@@ -215,6 +360,11 @@ func buildAppJS() string {
             } else if (event === 'done') {
                 if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
                 if (!agentEl && data) agentEl = appendMessage('agent', data);
+                // 重置工具状态
+                activeToolCards = {};
+                agentEl = null;
+                agentContent = '';
+                toolsContainer = null;
             } else if (event === 'error') {
                 if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
                 appendMessage('agent', 'Error: ' + data);
@@ -261,6 +411,11 @@ func buildAppJS() string {
     function renderMarkdown(text) {
         if (!text) return '';
         var html = escapeHtml(text);
+        // code blocks
+        html = html.replace(/` + "`" + `{3}(\\w*)\\n([\\s\\S]*?)` + "`" + `{3}/g, function(match, lang, code) {
+            return '<pre><code class="lang-' + lang + '">' + code + '</code></pre>';
+        });
+        html = html.replace(/` + "`" + `([^` + "`" + `]+)` + "`" + `/g, '<code>$1</code>');
         html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
         html = html.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
         html = html.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
@@ -293,6 +448,7 @@ func buildAppJS() string {
             });
         }
         sessionId = '';
+        activeToolCards = {};
         chatContainer.innerHTML =
             '<div class="welcome-msg">' +
             '<div class="welcome-icon">\\ud83e\\udd16</div>' +
@@ -302,7 +458,6 @@ func buildAppJS() string {
             "<button class=\\"quick-btn\\" onclick=\\"sendQuick('\\u5217\\u51fa\\u5f53\\u524d\\u76ee\\u5f55')\\">\\ud83d\\udcc2 \\u5217\\u51fa\\u76ee\\u5f55</button>" +
             "<button class=\\"quick-btn\\" onclick=\\"sendQuick('\\u8ba1\\u7b97 (123+456)*789')\\">\\ud83e\\uddee \\u8ba1\\u7b97</button>" +
             '</div></div>';
-        // 重置上下文面板
         updateContextInfo({
             max_input_tokens: 0, estimated_tokens: 0, usage_percent: 0,
             remaining_tokens: 0, message_count: 0, has_room: true,

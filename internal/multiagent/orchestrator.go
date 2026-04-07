@@ -185,6 +185,11 @@ func (o *Orchestrator) ChatStream(ctx context.Context, userMessage string, histo
 	return o.orchestratorAgent.ChatStream(ctx, userMessage, history, onDelta)
 }
 
+// ChatStreamV2 增强版流式对话（委托给编排 Agent）
+func (o *Orchestrator) ChatStreamV2(ctx context.Context, userMessage string, history []llm.Message, onEvent agent.StreamEventWriter) (string, []llm.Message, error) {
+	return o.orchestratorAgent.ChatStreamV2(ctx, userMessage, history, onEvent)
+}
+
 // GetAgent 返回编排 Agent（用于设置 usageTracker、ctxManager 等）
 func (o *Orchestrator) GetAgent() *agent.LoopAgent {
 	return o.orchestratorAgent

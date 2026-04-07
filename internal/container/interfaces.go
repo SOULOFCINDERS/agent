@@ -11,4 +11,5 @@ import (
 type ChatAgent interface {
 	Chat(ctx context.Context, userMessage string, history []conv.Message) (string, []conv.Message, error)
 	ChatStream(ctx context.Context, userMessage string, history []conv.Message, onDelta agent.StreamWriter) (string, []conv.Message, error)
+	ChatStreamV2(ctx context.Context, userMessage string, history []conv.Message, onEvent agent.StreamEventWriter) (string, []conv.Message, error)
 }

@@ -190,7 +190,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleChatStream SSE 流式对话
+// handleChatStream SSE 流式对话（增强版：支持工具调用事件）
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "method not allowed", 405)
@@ -232,47 +232,38 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
-	// 检查是否支持流式
-	_, canStream := s.loopAgent.GetClient().(interface {
-		StreamChat(ctx context.Context, messages []llm.Message, tools []llm.ToolDef) (*llm.StreamReader, error)
-	})
-
-	if canStream {
-		reply, newHistory, err := s.loopAgent.ChatStream(ctx, req.Message, history, func(delta string) {
-			sendSSE(w, flusher, "delta", delta)
-		})
-
-		if err != nil {
-			sendSSE(w, flusher, "error", err.Error())
-			return
+	// 使用增强版流式对话：通过 StreamEventWriter 接收结构化事件
+	onEvent := func(event agent.StreamEvent) {
+		switch event.Type {
+		case agent.EventDelta:
+			sendSSE(w, flusher, "delta", event.Content)
+		case agent.EventToolStart:
+			sendSSE(w, flusher, "tool_start", event.JSON())
+		case agent.EventToolEnd:
+			sendSSE(w, flusher, "tool_end", event.JSON())
+		case agent.EventIteration:
+			sendSSE(w, flusher, "iteration", event.JSON())
+		case agent.EventThinking:
+			sendSSE(w, flusher, "thinking", event.Thinking)
+		case agent.EventStatus:
+			sendSSE(w, flusher, "status", event.Status)
 		}
-
-		s.setSession(req.SessionID, newHistory)
-
-		// 发送上下文信息（在 done 之前）
-		ctxData := s.buildContextInfo(req.SessionID)
-		ctxJSON, _ := json.Marshal(ctxData)
-		sendSSE(w, flusher, "context", string(ctxJSON))
-
-		sendSSE(w, flusher, "done", reply)
-	} else {
-		// 降级：非流式
-		reply, newHistory, err := s.loopAgent.Chat(ctx, req.Message, history)
-		if err != nil {
-			sendSSE(w, flusher, "error", err.Error())
-			return
-		}
-
-		s.setSession(req.SessionID, newHistory)
-		sendSSE(w, flusher, "delta", reply)
-
-		// 发送上下文信息（在 done 之前）
-		ctxData := s.buildContextInfo(req.SessionID)
-		ctxJSON, _ := json.Marshal(ctxData)
-		sendSSE(w, flusher, "context", string(ctxJSON))
-
-		sendSSE(w, flusher, "done", reply)
 	}
+
+	reply, newHistory, err := s.loopAgent.ChatStreamV2(ctx, req.Message, history, onEvent)
+	if err != nil {
+		sendSSE(w, flusher, "error", err.Error())
+		return
+	}
+
+	s.setSession(req.SessionID, newHistory)
+
+	// 发送上下文信息（在 done 之前）
+	ctxData := s.buildContextInfo(req.SessionID)
+	ctxJSON, _ := json.Marshal(ctxData)
+	sendSSE(w, flusher, "context", string(ctxJSON))
+
+	sendSSE(w, flusher, "done", reply)
 }
 
 func (s *Server) handleClearSession(w http.ResponseWriter, r *http.Request) {
@@ -337,7 +328,6 @@ func (s *Server) buildContextInfo(sessionID string) contextInfo {
 		}
 	}
 
-	// 如果没有上下文窗口管理器，提供基于消息数的基础估算
 	if info.MaxInputTokens == 0 {
 		ctxMgr := s.loopAgent.GetContextManager()
 		if ctxMgr != nil {
@@ -387,7 +377,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func sendSSE(w http.ResponseWriter, flusher http.Flusher, event, data string) {
-	// SSE 中 data 字段需要每行一个 "data:" 前缀
 	lines := strings.Split(data, "\n")
 	fmt.Fprintf(w, "event: %s\n", event)
 	for _, line := range lines {

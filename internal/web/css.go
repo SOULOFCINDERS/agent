@@ -92,7 +92,6 @@ body {
 .ctx-ratio { color: var(--text); font-variant-numeric: tabular-nums; }
 .ctx-budget { color: var(--warning); font-size: 11px; }
 
-/* Progress bar */
 .ctx-progress-track {
     width: 100%;
     height: 6px;
@@ -119,7 +118,6 @@ body {
     font-variant-numeric: tabular-nums;
 }
 
-/* Token grid */
 .ctx-token-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -136,6 +134,102 @@ body {
 }
 .ctx-token-label { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
 .ctx-token-value { color: var(--text); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---- Tool Call Cards ---- */
+.tools-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 75%;
+    flex: 1;
+}
+
+.tool-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface2);
+    overflow: hidden;
+    font-size: 13px;
+    transition: border-color 0.3s ease;
+}
+.tool-card.running { border-left: 3px solid var(--accent); }
+.tool-card.done { border-left: 3px solid var(--success); }
+.tool-card.error { border-left: 3px solid var(--error); }
+
+.tool-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+}
+.tool-card-header:hover { background: rgba(255,255,255,0.03); }
+
+.tool-icon { font-size: 14px; }
+.tool-name { font-weight: 600; color: var(--text); flex: 1; }
+
+.tool-status-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-weight: 500;
+}
+.tool-status-badge.running {
+    background: rgba(79, 143, 247, 0.15);
+    color: var(--accent);
+    animation: pulse 1.5s infinite;
+}
+.tool-status-badge.done {
+    background: rgba(76, 175, 80, 0.15);
+    color: var(--success);
+}
+.tool-status-badge.error {
+    background: rgba(239, 83, 80, 0.15);
+    color: var(--error);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.tool-card-body {
+    padding: 0 12px 10px 12px;
+    border-top: 1px solid var(--border);
+}
+
+.tool-section-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    margin: 8px 0 4px 0;
+    font-weight: 500;
+}
+
+.tool-args {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.6;
+}
+.tool-arg-key { color: var(--accent); font-weight: 500; }
+.tool-arg-more { color: var(--text-dim); font-style: italic; }
+
+.tool-result-pre {
+    background: #111;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-family: "SF Mono", Monaco, monospace;
+    color: var(--text-dim);
+    max-height: 150px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 4px 0 0 0;
+}
 
 /* ---- Chat Container ---- */
 .chat-container {
@@ -188,6 +282,7 @@ body {
 .msg-content strong { color: #fff; }
 
 .thinking { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 13px; padding: 4px 0; }
+.thinking-text { font-style: italic; opacity: 0.7; }
 .thinking-dots span {
     width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim);
     display: inline-block; animation: bounce .6s infinite alternate;
@@ -224,6 +319,7 @@ body {
 
 @media (max-width: 600px) {
     .msg-content { max-width: 88%; }
+    .tools-container { max-width: 88%; }
     .header h1 { font-size: 16px; }
     .quick-actions { flex-direction: column; align-items: center; }
     .context-bar { flex-direction: column; gap: 10px; min-height: auto; }
