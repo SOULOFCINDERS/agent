@@ -31,6 +31,7 @@ type LoopAgent struct {
 	ctxManager      *ctxwindow.Manager       // 上下文窗口管理器（基础）
 	smartCtxManager *ctxwindow.SmartManager  // 增强版上下文窗口管理器（支持摘要压缩）
 	guardrails      gd.Pipeline              // 安全检查管道（可选）
+	enableNudge     bool                     // Phase 1: 是否启用 Nudge 上下文效率提醒
 }
 
 func NewLoopAgent(client llm.Client, reg *tools.Registry, systemPrompt string, trace io.Writer, memStore *memory.Store, compressor *memory.Compressor) *LoopAgent {
@@ -96,6 +97,7 @@ func NewLoopAgent(client llm.Client, reg *tools.Registry, systemPrompt string, t
 		memStore:     memStore,
 		compressor:   compressor,
 		retryTracker:  newRetryTracker(defaultMaxRetries),
+		enableNudge:  true, // 默认启用 Nudge
 	}
 }
 
@@ -205,6 +207,9 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 		// LLM 调用前预检：确保 history 在窗口内（用户消息可能很长）
 		history = a.fitContextWindowWithCtx(ctx, history)
 
+		// Phase 1: Nudge 注入 — 上下文使用率过高时提醒 LLM 注意效率
+		history = a.injectNudgeIfNeeded(history)
+
 		a.traceLog("iteration", map[string]any{"i": i, "messages": len(history)})
 
 		// 预算检查（调用前）
@@ -219,6 +224,11 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 		resp, err := a.llmClient.Chat(ctx, history, a.toolDefs)
 		if err != nil {
 			return "", history, fmt.Errorf("LLM call failed: %w", err)
+		}
+
+		// Phase 1: 更新 cache 时间戳（每次收到 LLM 回复后）
+		if a.ctxManager != nil {
+			a.ctxManager.UpdateLastAssistantTime(time.Now())
 		}
 
 		// 记录 token 用量
@@ -251,6 +261,8 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 					history[len(history)-1] = llm.Message{Role: "assistant", Content: finalContent}
 				}
 			}
+			// 清除 Nudge 消息（不持久化到会话历史中）
+			history = a.removeNudgeMessages(history)
 			a.traceLog("final_answer", map[string]any{"content_len": len(finalContent)})
 			return finalContent, history, nil
 		}
@@ -263,6 +275,71 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 	}
 
 	return "", history, fmt.Errorf("reached maximum iterations (%d)", maxIterations)
+}
+
+// ---- Phase 1: Nudge 注入相关方法 ----
+
+// nudgeMarker 用于标识 Nudge 消息，便于后续清理
+const nudgeMarker = "[CONTEXT EFFICIENCY]"
+const nudgeCriticalMarker = "[CONTEXT CRITICAL]"
+
+// injectNudgeIfNeeded 在 LLM 调用前检查上下文使用率，按需注入 Nudge 提醒
+// Nudge 消息作为临时 system 消息注入到 history 末尾（最新 user 消息之后）
+// 返回可能被修改的 history
+func (a *LoopAgent) injectNudgeIfNeeded(history []llm.Message) []llm.Message {
+	if !a.enableNudge {
+		return history
+	}
+
+	// 需要上下文管理器来获取使用状态
+	if a.ctxManager == nil {
+		return history
+	}
+
+	// 先清除旧的 Nudge 消息，避免重复
+	history = a.removeNudgeMessages(history)
+
+	status := a.ctxManager.Status(history)
+	nudgeMsg := ctxwindow.NudgeMessage(status)
+	if nudgeMsg == "" {
+		return history
+	}
+
+	a.traceLog("nudge_inject", map[string]any{
+		"usage_percent": fmt.Sprintf("%.1f%%", status.UsagePercent*100),
+		"remaining":     status.RemainingTokens,
+		"cache_temp":    status.CacheTemp,
+	})
+
+	// 将 Nudge 消息追加到末尾
+	history = append(history, llm.Message{
+		Role:    "system",
+		Content: nudgeMsg,
+	})
+
+	return history
+}
+
+// removeNudgeMessages 从 history 中移除所有 Nudge 消息
+// Nudge 是临时性的效率提醒，不应该持久化到会话存储中
+func (a *LoopAgent) removeNudgeMessages(history []llm.Message) []llm.Message {
+	result := make([]llm.Message, 0, len(history))
+	for _, msg := range history {
+		if msg.Role == "system" && isNudgeMessage(msg.Content) {
+			continue
+		}
+		result = append(result, msg)
+	}
+	return result
+}
+
+// isNudgeMessage 判断消息内容是否为 Nudge 提醒
+func isNudgeMessage(content string) bool {
+	if len(content) < len(nudgeMarker) {
+		return false
+	}
+	return content[:len(nudgeMarker)] == nudgeMarker ||
+		(len(content) >= len(nudgeCriticalMarker) && content[:len(nudgeCriticalMarker)] == nudgeCriticalMarker)
 }
 
 // fitContextWindow 使用上下文窗口管理器裁剪历史（向后兼容）
@@ -370,6 +447,11 @@ func (a *LoopAgent) GetSmartContextManager() *ctxwindow.SmartManager {
 // GetContextManager 获取上下文窗口管理器
 func (a *LoopAgent) GetContextManager() *ctxwindow.Manager {
 	return a.ctxManager
+}
+
+// SetNudgeEnabled 启用或禁用 Nudge 上下文效率提醒
+func (a *LoopAgent) SetNudgeEnabled(enabled bool) {
+	a.enableNudge = enabled
 }
 
 // ContextWindowStatus 返回当前上下文窗口状态（无管理器返回零值）

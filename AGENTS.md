@@ -174,3 +174,29 @@ Container.Build()
 - 架构设计文档: @docs/architecture.md
 - DDD 重构记录: 参见飞书文档 RxaKdvZvVoGNTbxbPFFc9uHInzc
 - 调用链路图: @docs/agent-flow.svg
+
+### Context Engine Phase 1 优化
+基于 Claude Code context engine 的 6 层设计理念，在已有的 2 层裁剪系统（Manager.Fit + SmartManager.SmartFit）上增加 3 项低成本高收益改进：
+
+**1. TruncationCache（决策冻结）** — `internal/ctxwindow/manager.go`
+- 按 `tool_call_id` 缓存截断后的内容，同一工具结果只截断一次
+- 后续 `Fit()` 调用直接复用缓存，保证 prompt 前缀稳定性
+- 最大化 LLM API prefix cache 命中率，减少计费和延迟
+- `ClearTruncationCache()` 在新会话时清空
+
+**2. Cache 冷热感知** — `internal/ctxwindow/manager.go`
+- `UpdateLastAssistantTime()` 记录最近 assistant 回复时间
+- `CacheTemperature()` 判断 prefix cache 冷热（默认 5 分钟阈值）
+- 冷启动时 `effectiveToolResultMaxTokens()` 返回更低的截断上限（默认 50%）
+- 热状态下保持正常截断策略，优先维护 prompt 结构稳定
+
+**3. Nudge 效率提醒** — `internal/ctxwindow/nudge.go` + `internal/agent/loop.go`
+- 上下文使用率 ≥60% 时注入 `[CONTEXT EFFICIENCY]` 提醒
+- 使用率 ≥85% 时升级为 `[CONTEXT CRITICAL]` 紧急提醒
+- Nudge 作为临时 system 消息，在最终回复前自动清除，不持久化
+- 通过 `SetNudgeEnabled(bool)` 控制开关
+
+**配置参数**：
+- `ManagerConfig.ColdThreshold` — cache 冷热阈值（默认 5 分钟）
+- `ManagerConfig.ColdAggressiveRatio` — 冷启动截断比例（默认 0.5）
+- `NudgeThreshold` / `NudgeCriticalThreshold` — Nudge 触发阈值常量

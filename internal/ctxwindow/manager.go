@@ -3,6 +3,7 @@ package ctxwindow
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 )
@@ -65,6 +66,20 @@ func LookupModel(name string) ModelProfile {
 	return DefaultProfile
 }
 
+// ---- 缓存冷热判定 ----
+
+// CacheTemperature 表示 LLM prefix cache 的冷热状态
+type CacheTemperature int
+
+const (
+	CacheHot  CacheTemperature = 0 // 距上次 assistant 回复 < ColdThreshold，prefix cache 大概率命中
+	CacheCold CacheTemperature = 1 // 距上次 assistant 回复 >= ColdThreshold，cache 大概率已失效
+)
+
+// DefaultColdThreshold cache 变冷的时间阈值（默认 5 分钟）
+// LLM API 的 prefix cache 通常在 5-10 分钟无请求后淘汰
+const DefaultColdThreshold = 5 * time.Minute
+
 // ---- 窗口管理器 ----
 
 // ManagerConfig 窗口管理器配置
@@ -87,6 +102,15 @@ type ManagerConfig struct {
 
 	// EnableAutoTruncate 启用自动截断（默认 true）
 	EnableAutoTruncate bool
+
+	// ColdThreshold cache 冷热判定阈值（默认 DefaultColdThreshold）
+	// 设为 0 则使用默认值
+	ColdThreshold time.Duration
+
+	// ColdAggressiveRatio 冷启动时工具结果截断比例（相对于正常上限）
+	// 例如 0.5 表示冷启动时将 ToolResultMaxTokens 减半
+	// 设为 0 则使用默认值 0.5
+	ColdAggressiveRatio float64
 }
 
 // Manager 上下文窗口管理器
@@ -95,6 +119,8 @@ type ManagerConfig struct {
 //   2. 判断是否即将超出窗口
 //   3. 按优先级裁剪消息，保证不超出模型上下文窗口
 //   4. 提供窗口使用情况报告
+//   5. TruncationCache: 冻结截断决策，保证 prefix cache 命中率
+//   6. Cache 冷热感知: 冷启动时更激进地清理旧工具结果
 type Manager struct {
 	mu        sync.Mutex
 	config    ManagerConfig
@@ -103,6 +129,17 @@ type Manager struct {
 	// 统计数据
 	totalFits      int // Fit 调用总次数
 	totalTruncates int // 发生截断的次数
+
+	// ---- Phase 1: TruncationCache (决策冻结) ----
+	// 按 tool_call_id 缓存截断后的内容
+	// 一旦某个工具结果被截断，后续 Fit() 调用直接复用该结果
+	// 这保证了 prompt 前缀的稳定性，最大化 LLM API prefix cache 命中
+	truncationCache map[string]string
+
+	// ---- Phase 1: Cache 冷热感知 ----
+	// 记录最近一次 assistant 回复的时间
+	// 用于判断 LLM API 的 prefix cache 是否仍然有效
+	lastAssistantTime time.Time
 }
 
 // NewManager 创建上下文窗口管理器
@@ -123,21 +160,29 @@ func NewManager(cfg ManagerConfig) *Manager {
 	if cfg.SummaryTokenBudget <= 0 {
 		cfg.SummaryTokenBudget = 300
 	}
+	if cfg.ColdThreshold <= 0 {
+		cfg.ColdThreshold = DefaultColdThreshold
+	}
+	if cfg.ColdAggressiveRatio <= 0 || cfg.ColdAggressiveRatio > 1 {
+		cfg.ColdAggressiveRatio = 0.5
+	}
 
 	return &Manager{
-		config:    cfg,
-		estimator: DefaultEstimator(),
+		config:          cfg,
+		estimator:       DefaultEstimator(),
+		truncationCache: make(map[string]string),
 	}
 }
 
 // WindowStatus 窗口使用状态
 type WindowStatus struct {
-	MaxInputTokens   int     // 最大输入 token 预算
-	EstimatedTokens  int     // 当前估算 token 数
-	UsagePercent     float64 // 使用率 (0-1)
-	MessageCount     int     // 消息总数
-	HasRoom          bool    // 是否还有空间
-	RemainingTokens  int     // 剩余 token 数
+	MaxInputTokens   int              // 最大输入 token 预算
+	EstimatedTokens  int              // 当前估算 token 数
+	UsagePercent     float64          // 使用率 (0-1)
+	MessageCount     int              // 消息总数
+	HasRoom          bool             // 是否还有空间
+	RemainingTokens  int              // 剩余 token 数
+	CacheTemp        CacheTemperature // 当前 cache 冷热状态
 }
 
 // Status 返回当前 history 的窗口使用状态
@@ -155,8 +200,65 @@ func (m *Manager) Status(history []llm.Message) WindowStatus {
 		MessageCount:    len(history),
 		HasRoom:         estimated < m.config.MaxInputTokens,
 		RemainingTokens: remaining,
+		CacheTemp:       m.CacheTemperature(),
 	}
 }
+
+// ---- Cache 冷热感知 API ----
+
+// UpdateLastAssistantTime 记录最近一次 assistant 回复时间
+// 应在每次收到 LLM 响应后调用
+func (m *Manager) UpdateLastAssistantTime(t time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastAssistantTime = t
+}
+
+// CacheTemperature 返回当前 prefix cache 的冷热状态
+func (m *Manager) CacheTemperature() CacheTemperature {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.lastAssistantTime.IsZero() {
+		return CacheCold // 首次调用，无历史
+	}
+	if time.Since(m.lastAssistantTime) >= m.config.ColdThreshold {
+		return CacheCold
+	}
+	return CacheHot
+}
+
+// effectiveToolResultMaxTokens 根据冷热状态返回实际的工具结果 token 上限
+// 冷启动时使用更激进的截断（更短的上限）来减少 prompt 体积
+func (m *Manager) effectiveToolResultMaxTokens() int {
+	max := m.config.ToolResultMaxTokens
+	if m.CacheTemperature() == CacheCold {
+		aggressive := int(float64(max) * m.config.ColdAggressiveRatio)
+		if aggressive < 100 {
+			aggressive = 100
+		}
+		return aggressive
+	}
+	return max
+}
+
+// ---- TruncationCache API ----
+
+// TruncationCacheSize 返回当前缓存条目数（用于观测和测试）
+func (m *Manager) TruncationCacheSize() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.truncationCache)
+}
+
+// ClearTruncationCache 清空截断缓存（新会话时调用）
+func (m *Manager) ClearTruncationCache() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.truncationCache = make(map[string]string)
+}
+
+// ---- 核心估算方法 ----
 
 // EstimateHistory 估算整个 history 的 token 数
 func (m *Manager) EstimateHistory(history []llm.Message) int {
@@ -200,10 +302,11 @@ func (m *Manager) WouldExceed(history []llm.Message, newMsgTokenEstimate int) bo
 // 返回裁剪后的 history（不修改原始 slice）
 //
 // 裁剪策略（按优先级从低到高）：
-//   1. 截断过长的工具结果
-//   2. 移除旧的工具结果消息
-//   3. 移除旧的对话轮次（保护最近 N 轮）
-//   4. 如果仍然超出，截断最早的保护轮次中的工具结果
+//   1. 截断过长的工具结果（利用 TruncationCache 冻结决策）
+//   2. 冷启动时更激进地截断旧工具结果
+//   3. 移除旧的工具结果消息
+//   4. 移除旧的对话轮次（保护最近 N 轮）
+//   5. 如果仍然超出，截断最早的保护轮次中的工具结果
 //
 // 绝不裁剪：system 消息、最新的 user 消息
 func (m *Manager) Fit(history []llm.Message) []llm.Message {
@@ -223,7 +326,7 @@ func (m *Manager) Fit(history []llm.Message) []llm.Message {
 	result := make([]llm.Message, len(history))
 	copy(result, history)
 
-	// Phase 1: 截断过长的工具结果
+	// Phase 1: 截断过长的工具结果（带 TruncationCache + 冷热感知）
 	result = m.truncateLongToolResults(result)
 	if m.EstimateHistory(result) <= m.config.MaxInputTokens {
 		return result
@@ -237,13 +340,29 @@ func (m *Manager) Fit(history []llm.Message) []llm.Message {
 }
 
 // truncateLongToolResults 截断超长的工具结果
+// 改进点：
+//   - TruncationCache: 对同一 tool_call_id 的截断决策只做一次，后续复用缓存
+//   - 冷热感知: 冷启动时使用更小的 token 上限
 func (m *Manager) truncateLongToolResults(msgs []llm.Message) []llm.Message {
-	maxTokens := m.config.ToolResultMaxTokens
+	maxTokens := m.effectiveToolResultMaxTokens()
 
 	for i, msg := range msgs {
 		if msg.Role != "tool" {
 			continue
 		}
+
+		// TruncationCache: 如果该 tool_call_id 已有缓存决策，直接复用
+		if msg.ToolCallID != "" {
+			m.mu.Lock()
+			cached, hasCached := m.truncationCache[msg.ToolCallID]
+			m.mu.Unlock()
+
+			if hasCached {
+				msgs[i].Content = cached
+				continue
+			}
+		}
+
 		estimated := m.estimator.EstimateText(msg.Content)
 		if estimated > maxTokens {
 			// 按字符比例截断
@@ -254,7 +373,15 @@ func (m *Manager) truncateLongToolResults(msgs []llm.Message) []llm.Message {
 			}
 			runes := []rune(msg.Content)
 			if maxChars < len(runes) {
-				msgs[i].Content = string(runes[:maxChars]) + "\n... [truncated by context window manager]"
+				truncated := string(runes[:maxChars]) + "\n... [truncated by context window manager]"
+				msgs[i].Content = truncated
+
+				// 冻结决策到缓存
+				if msg.ToolCallID != "" {
+					m.mu.Lock()
+					m.truncationCache[msg.ToolCallID] = truncated
+					m.mu.Unlock()
+				}
 			}
 		}
 	}
@@ -419,11 +546,16 @@ func (m *Manager) Config() ManagerConfig {
 
 // FormatStatus 返回人类可读的窗口状态
 func FormatStatus(s WindowStatus) string {
+	tempStr := "hot"
+	if s.CacheTemp == CacheCold {
+		tempStr = "cold"
+	}
 	return fmt.Sprintf(
-		"上下文窗口: %d/%d tokens (%.1f%%) | %d 条消息 | 剩余 %d tokens",
+		"上下文窗口: %d/%d tokens (%.1f%%) | %d 条消息 | 剩余 %d tokens | cache: %s",
 		s.EstimatedTokens, s.MaxInputTokens,
 		s.UsagePercent*100,
 		s.MessageCount,
 		s.RemainingTokens,
+		tempStr,
 	)
 }
