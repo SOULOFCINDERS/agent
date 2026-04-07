@@ -298,6 +298,8 @@ func buildRegistry(absRoot string, cfg Config) *tools.Registry {
 	reg.Register(tools.NewReadFileTool(absRoot))
 	reg.Register(tools.NewListDirTool(absRoot))
 	reg.Register(tools.NewGrepRepoTool(absRoot))
+	reg.Register(tools.NewWriteFileTool(absRoot))
+	reg.Register(tools.NewEditFileTool(absRoot))
 	reg.Register(tools.NewSummarizeTool())
 	reg.Register(tools.NewWeatherTool())
 

@@ -120,5 +120,33 @@ func BuiltinSchemas() map[string]struct {
 				"required": ["url"]
 			}`),
 		},
-	}
+			"write_file": {
+			Desc: "创建新文件或覆写已有文件。自动创建不存在的父目录。路径限制在项目根目录内，禁止写入敏感系统文件。",
+			Schema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path":    {"type": "string", "description": "文件路径（相对于项目根目录）"},
+					"content": {"type": "string", "description": "要写入的完整文件内容"},
+					"create_dirs": {"type": "boolean", "description": "是否自动创建父目录（默认 true）"}
+				},
+				"required": ["path", "content"]
+			}`),
+		},
+		"edit_file": {
+			Desc: "精确编辑已有文件。支持多种编辑模式：(1) 搜索替换 old_text→new_text；(2) 行号插入 line+insert；(3) 行号替换 line+new_text；(4) 行号删除 line+delete；(5) 末尾追加 append。每次只执行一个编辑操作，多处修改需多次调用。",
+			Schema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path":     {"type": "string", "description": "文件路径（相对于项目根目录）"},
+					"old_text": {"type": "string", "description": "要被替换的原文（精确匹配，包括空格和换行）"},
+					"new_text": {"type": "string", "description": "替换后的新内容"},
+					"line":     {"type": "integer", "description": "行号（用于行号编辑模式，从 1 开始）"},
+					"insert":   {"type": "string", "description": "在指定行前插入的内容"},
+					"delete":   {"type": "integer", "description": "从指定行开始删除的行数"},
+					"append":   {"type": "string", "description": "追加到文件末尾的内容"}
+				},
+				"required": ["path"]
+			}`),
+		},
+}
 }

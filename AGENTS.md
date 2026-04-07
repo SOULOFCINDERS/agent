@@ -40,7 +40,7 @@ go run ./cmd/agent web --mock --addr :8080  # 启动 Web UI
 | `internal/domain/guardrail/` | Domain | Guard/Pipeline 接口、Action/Phase 值对象 | 仅标准库 |
 | `internal/container/` | Container | DI 依赖装配 | 全部内部包 |
 | `internal/llm/` | Infrastructure | OpenAI 兼容 LLM 客户端实现 | domain/conversation |
-| `internal/tools/` | Infrastructure | 具体工具实现 (echo, calc, read_file...) | domain/tool |
+| `internal/tools/` | Infrastructure | 具体工具实现 (echo, calc, read_file, write_file, edit_file...) | domain/tool |
 | `internal/memory/` | Infrastructure | JSON 文件持久化记忆存储 | domain/memory |
 | `internal/agent/` | Infrastructure | LoopAgent 对话循环实现 | domain/* + llm + tools |
 | `internal/ctxwindow/` | Infrastructure | 上下文窗口裁剪实现 | domain/ctxwindow |
