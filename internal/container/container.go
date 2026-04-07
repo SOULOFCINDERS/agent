@@ -4,14 +4,18 @@
 package container
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log"
 	"path/filepath"
 
 	"github.com/SOULOFCINDERS/agent/internal/agent"
+	dmcp "github.com/SOULOFCINDERS/agent/internal/domain/mcp"
 	"github.com/SOULOFCINDERS/agent/internal/guardrail"
 	"github.com/SOULOFCINDERS/agent/internal/ctxwindow"
 	"github.com/SOULOFCINDERS/agent/internal/llm"
+	mcpinfra "github.com/SOULOFCINDERS/agent/internal/mcp"
 	"github.com/SOULOFCINDERS/agent/internal/memory"
 	"github.com/SOULOFCINDERS/agent/internal/multiagent"
 	"github.com/SOULOFCINDERS/agent/internal/tools"
@@ -45,6 +49,7 @@ type Config struct {
 	MaxInputChars  int                     // 输入最大字符数（0=不限）
 	CtxWindow int   // 上下文窗口大小覆盖
 
+	MCPServers []dmcp.ServerConfig // MCP Server 连接列表（可选）
 	// 运行时
 	Trace       bool
 	TraceWriter io.Writer
@@ -65,6 +70,7 @@ type App struct {
 	TraceWriter    io.Writer
 
 	Guardrails *guardrail.GuardPipeline
+	MCPManager *mcpinfra.MCPManager
 
 	Config Config
 }
@@ -143,6 +149,17 @@ func Build(cfg Config) (*App, error) {
 		app.Guardrails = guardrail.DefaultPipeline(cfg.BlockKeywords, cfg.MaxInputChars)
 	}
 
+	// 6.5 MCP éæï¼å¯éï¼
+	if len(cfg.MCPServers) > 0 {
+		app.MCPManager = mcpinfra.NewManager()
+		ctx := context.Background()
+		for _, sc := range cfg.MCPServers {
+			if err := app.MCPManager.AddServer(ctx, sc); err != nil {
+				log.Printf("[MCP] warning: failed to connect server %s: %v", sc.ID, err)
+			}
+		}
+	}
+
 	// 7. LoopAgent
 	app.LoopAgent = agent.NewLoopAgent(
 		app.LLMClient, app.Registry, cfg.SystemPrompt,
@@ -218,6 +235,14 @@ func (a *App) ChatAgent() ChatAgent {
 		return a.Orchestrator
 	}
 	return a.LoopAgent
+}
+
+// Close æ¸ç App ææçèµæºï¼å¦ MCP è¿æ¥ï¼
+func (a *App) Close() error {
+	if a.MCPManager != nil {
+		return a.MCPManager.Close()
+	}
+	return nil
 }
 
 // buildRegistry 构建工具注册表

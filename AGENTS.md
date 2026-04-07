@@ -5,7 +5,7 @@
 ## 项目信息
 
 - **项目类型**: Go CLI + Web 应用（LLM Agent Framework）
-- **Go 版本**: 1.22
+- **Go 版本**: 1.25
 - **模块路径**: `github.com/SOULOFCINDERS/agent`
 - **架构模式**: DDD 四层架构（Domain → Usecase → Presenter → Infrastructure）
 - **入口**: `cmd/agent/main.go`
@@ -45,6 +45,8 @@ go run ./cmd/agent web --mock --addr :8080  # 启动 Web UI
 | `internal/agent/` | Infrastructure | LoopAgent 对话循环实现 | domain/* + llm + tools |
 | `internal/ctxwindow/` | Infrastructure | 上下文窗口裁剪实现 | domain/ctxwindow |
 | `internal/guardrail/` | Infrastructure | 安全检查实现 (PII/关键词/注入/长度) | domain/guardrail |
+| `internal/domain/mcp/` | Domain | MCP 协议接口：Client、Manager、ServerConfig、DiscoveredTool | 仅标准库 |
+| `internal/mcp/` | Infrastructure | MCP 实现：Stdio/SSE Client、MCPManager、MCPToolAdapter | domain/mcp + domain/tool |
 | `internal/structured/` | Infrastructure | 结构化输出引擎实现 | domain/structured |
 | `cmd/agent/` | Entry | CLI 入口，参数解析 | container + presenter |
 
@@ -107,6 +109,25 @@ Harness 层在 3 个阶段执行安全检查，通过 `gd.Pipeline` 链式调用
 - `LengthGuard` — 输入长度限制 → Block
 
 启用方式：`container.Config{GuardrailMode: true}`
+
+### MCP (Model Context Protocol) 集成
+MCP 是 Anthropic 提出的开放协议，允许 Agent 动态发现和调用外部工具。本项目使用官方 Go SDK（`github.com/modelcontextprotocol/go-sdk`）。
+
+**架构流程**：
+```
+Container.Build()
+  -> MCPManager.AddServer()       // 连接 MCP Servers (stdio/SSE)
+  -> MCPManager.DiscoverAllTools() // 发现工具, 名称资格化为 serverID/toolName
+  -> MCPToolAdapter               // 桥接到 tool.Tool 接口
+  -> Registry.Register()          // 注册到工具表
+  -> LoopAgent.InjectToolDefs()   // 注入 LLM function calling 定义
+```
+
+**传输模式**：
+- `stdio`: 通过子进程 stdin/stdout 通信（适合本地工具）
+- `sse`/`http`: 通过 HTTP Streamable 传输（适合远程服务）
+
+**启用方式**：在 `container.Config` 中配置 `MCPServers` 字段即可。
 
 ## 新增功能指南
 
