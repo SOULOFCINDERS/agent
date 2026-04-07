@@ -1,8 +1,4 @@
-package web
-
-func buildAppJS() string {
-	// 注意: JS 中不使用反引号模板字符串，避免 Go raw string 冲突
-	return `(function() {
+(function() {
     var chatContainer = document.getElementById('chatContainer');
     var messageInput = document.getElementById('messageInput');
     var sendBtn = document.getElementById('sendBtn');
@@ -431,10 +427,10 @@ func buildAppJS() string {
         if (!text) return '';
         var html = escapeHtml(text);
         // code blocks
-        html = html.replace(/` + "`" + `{3}(\w*)\n([\s\S]*?)` + "`" + `{3}/g, function(match, lang, code) {
+        html = html.replace(/`{3}(\w*)\n([\s\S]*?)`{3}/g, function(match, lang, code) {
             return '<pre><code class="lang-' + lang + '">' + code + '</code></pre>';
         });
-        html = html.replace(/` + "`" + `([^` + "`" + `]+)` + "`" + `/g, '<code>$1</code>');
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
         html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
         html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
         html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
@@ -484,5 +480,4 @@ func buildAppJS() string {
             call_count: 0, budget: 0, budget_remaining: 0
         });
     }
-})();`
-}
+})();
