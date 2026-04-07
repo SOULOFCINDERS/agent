@@ -317,3 +317,161 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// ---- 知识库批量导入测试 ----
+
+func TestEngine_IndexDirectory(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := t.TempDir()
+
+	// 创建测试目录结构
+	//   dir/
+	//     readme.md
+	//     main.go
+	//     image.png (应跳过)
+	//     .hidden/secret.txt (应跳过)
+	//     sub/
+	//       helper.go
+	os.WriteFile(filepath.Join(dir, "readme.md"), []byte("# 项目说明\n\n这是一个测试项目的文档说明。\n\n## 安装\n\n使用 go install 安装。"), 0644)
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}"), 0644)
+	os.WriteFile(filepath.Join(dir, "image.png"), []byte{0x89, 0x50, 0x4E, 0x47}, 0644)
+	os.MkdirAll(filepath.Join(dir, ".hidden"), 0755)
+	os.WriteFile(filepath.Join(dir, ".hidden", "secret.txt"), []byte("secret"), 0644)
+	os.MkdirAll(filepath.Join(dir, "sub"), 0755)
+	os.WriteFile(filepath.Join(dir, "sub", "helper.go"), []byte("package sub\n\nfunc Helper() string { return \"help\" }"), 0644)
+
+	engine, err := NewEngine(EngineConfig{DataDir: dataDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := engine.IndexDirectory(context.Background(), dir, DefaultImportOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Total=%d, Indexed=%d, Skipped=%d, Failed=%d", result.Total, result.Indexed, result.Skipped, result.Failed)
+
+	if result.Indexed != 3 {
+		t.Errorf("expected 3 indexed, got %d", result.Indexed)
+	}
+	if result.Skipped < 1 {
+		t.Errorf("expected at least 1 skipped (image.png), got %d", result.Skipped)
+	}
+	if result.Failed != 0 {
+		t.Errorf("expected 0 failed, got %d: %v", result.Failed, result.Errors)
+	}
+
+	// 验证检索
+	results, err := engine.Query(context.Background(), "安装项目", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results from imported docs")
+	}
+	t.Logf("Query result: %s (score=%.4f)", results[0].Chunk.Source, results[0].Score)
+}
+
+func TestEngine_IndexDirectory_NonRecursive(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "top.txt"), []byte("top level file content"), 0644)
+	os.MkdirAll(filepath.Join(dir, "sub"), 0755)
+	os.WriteFile(filepath.Join(dir, "sub", "nested.txt"), []byte("nested file content"), 0644)
+
+	engine, err := NewEngine(EngineConfig{DataDir: dataDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DefaultImportOptions()
+	opts.Recursive = false
+
+	result, err := engine.IndexDirectory(context.Background(), dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Indexed != 1 {
+		t.Errorf("non-recursive should index 1 file, got %d", result.Indexed)
+	}
+}
+
+func TestEngine_IndexDirectory_ExtensionFilter(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "doc.md"), []byte("# Markdown doc"), 0644)
+	os.WriteFile(filepath.Join(dir, "code.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(dir, "data.txt"), []byte("plain text"), 0644)
+
+	engine, err := NewEngine(EngineConfig{DataDir: dataDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DefaultImportOptions()
+	opts.Extensions = map[string]bool{".md": true} // 只索引 .md
+
+	result, err := engine.IndexDirectory(context.Background(), dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Indexed != 1 {
+		t.Errorf("extension filter should index 1 file (.md only), got %d", result.Indexed)
+	}
+}
+
+func TestEngine_IndexGlob(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "a.md"), []byte("# Doc A\n\nContent A"), 0644)
+	os.WriteFile(filepath.Join(dir, "b.md"), []byte("# Doc B\n\nContent B"), 0644)
+	os.WriteFile(filepath.Join(dir, "c.txt"), []byte("text C"), 0644)
+
+	engine, err := NewEngine(EngineConfig{DataDir: dataDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pattern := filepath.Join(dir, "*.md")
+	result, err := engine.IndexGlob(context.Background(), pattern, DefaultImportOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Indexed != 2 {
+		t.Errorf("glob *.md should index 2 files, got %d", result.Indexed)
+	}
+}
+
+func TestEngine_IndexDirectory_SkipExisting(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "doc.md"), []byte("# Test doc for skip existing"), 0644)
+
+	engine, err := NewEngine(EngineConfig{DataDir: dataDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 第一次导入
+	r1, _ := engine.IndexDirectory(context.Background(), dir, DefaultImportOptions())
+	if r1.Indexed != 1 {
+		t.Fatalf("first import should index 1, got %d", r1.Indexed)
+	}
+
+	// 第二次导入（应跳过已存在的）
+	r2, _ := engine.IndexDirectory(context.Background(), dir, DefaultImportOptions())
+	if r2.Indexed != 0 {
+		t.Errorf("second import should skip all, got %d indexed", r2.Indexed)
+	}
+	if r2.Skipped < 1 {
+		t.Errorf("second import should skip 1, got %d skipped", r2.Skipped)
+	}
+}

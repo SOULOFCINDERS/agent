@@ -15,11 +15,17 @@ import (
 	"github.com/SOULOFCINDERS/agent/internal/agent"
 	"github.com/SOULOFCINDERS/agent/internal/container"
 	sessionPkg "github.com/SOULOFCINDERS/agent/internal/session"
+	"github.com/SOULOFCINDERS/agent/internal/rag"
 	"github.com/SOULOFCINDERS/agent/internal/executor"
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 	"github.com/SOULOFCINDERS/agent/internal/planner"
 	"github.com/SOULOFCINDERS/agent/internal/tools"
 )
+
+// 包级 RAG 加载选项（由 parseCommonFlags 设置）
+var ragLoadDir string
+var ragBackend string
+
 
 func main() {
 	os.Exit(realMain())
@@ -71,7 +77,9 @@ chat options:
   --resume ID       resume a previous conversation session
   --session-dir DIR session storage directory (default: <root>/.agent-sessions)
   --rag             enable RAG (Retrieval-Augmented Generation) for document indexing and retrieval
-  --rag-dir DIR     RAG index storage directory (default: <root>/.agent-rag)`)
+  --rag-dir DIR     RAG index storage directory (default: <root>/.agent-rag)
+  --rag-load DIR    load knowledge base from directory at startup (auto-enables --rag)
+  --rag-backend STR RAG backend: "chromem" or "legacy" (default: legacy)`)
 }
 
 // ---------- run 命令（保留原有功能，不经过 Container） ----------
@@ -208,6 +216,20 @@ func chatCmd(args []string) int {
 		return 1
 	}
 
+
+	// 启动时加载知识库
+	if ragLoadDir != "" && app.RAGEngine != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "📦 正在加载知识库: %s\n", ragLoadDir)
+		opts := rag.DefaultImportOptions()
+		result, loadErr := app.RAGEngine.IndexDirectory(context.Background(), ragLoadDir, opts)
+		if loadErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "⚠️  知识库加载错误: %s\n", loadErr)
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "✅ 知识库加载完成: %d 文件索引, %d 跳过, %d 失败\n",
+				result.Indexed, result.Skipped, result.Failed)
+		}
+	}
+
 	// 打印启动信息
 	printStartupInfo(app)
 
@@ -271,6 +293,10 @@ func webCmd(args []string) int {
 
 // parseCommonFlags 解析 chat / web 共用的命令行参数
 func parseCommonFlags(args []string) container.Config {
+	// 重置包级 RAG 选项
+	ragLoadDir = ""
+	ragBackend = ""
+
 	cfg := container.Config{
 		Root: ".",
 	}
@@ -301,6 +327,22 @@ func parseCommonFlags(args []string) container.Config {
 			}
 		case strings.HasPrefix(a, "--rag-dir="):
 			cfg.RAGDir = strings.TrimPrefix(a, "--rag-dir=")
+		case a == "--rag-load":
+			i++
+			if i < len(args) {
+				ragLoadDir = args[i]
+				cfg.RAGMode = true // 自动启用 RAG
+			}
+		case strings.HasPrefix(a, "--rag-load="):
+			ragLoadDir = strings.TrimPrefix(a, "--rag-load=")
+			cfg.RAGMode = true
+		case a == "--rag-backend":
+			i++
+			if i < len(args) {
+				ragBackend = args[i]
+			}
+		case strings.HasPrefix(a, "--rag-backend="):
+			ragBackend = strings.TrimPrefix(a, "--rag-backend=")
 		case a == "--budget":
 			if i+1 < len(args) {
 				i++

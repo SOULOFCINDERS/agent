@@ -191,3 +191,124 @@ func (t *RAGDeleteTool) Execute(ctx context.Context, args map[string]any) (any, 
 	return fmt.Sprintf("🗑️ 已删除文档: %s\n当前索引: %d 文档, %d 片段",
 		docID, stats.DocumentCount, stats.ChunkCount), nil
 }
+
+// ---- RAG Import Tool ----
+
+// RAGImportTool 批量导入知识库目录
+type RAGImportTool struct {
+	engine *rag.Engine
+}
+
+func NewRAGImportTool(engine *rag.Engine) *RAGImportTool {
+	return &RAGImportTool{engine: engine}
+}
+
+func (t *RAGImportTool) Name() string { return "rag_import" }
+
+func (t *RAGImportTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+	// 获取路径参数
+	path := ""
+	if v, ok := args["path"]; ok {
+		path = fmt.Sprint(v)
+	} else if v, ok := args["dir"]; ok {
+		path = fmt.Sprint(v)
+	} else if v, ok := args["directory"]; ok {
+		path = fmt.Sprint(v)
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, fmt.Errorf("请提供 path 参数（目录路径或 glob 模式，如 ./docs 或 ./data/*.md）")
+	}
+
+	// 构建导入选项
+	opts := rag.DefaultImportOptions()
+
+	// recursive 参数
+	if v, ok := args["recursive"]; ok {
+		switch b := v.(type) {
+		case bool:
+			opts.Recursive = b
+		case string:
+			opts.Recursive = b != "false" && b != "0"
+		}
+	}
+
+	// glob 参数
+	if v, ok := args["glob"]; ok {
+		opts.GlobPattern = fmt.Sprint(v)
+	}
+
+	// max_file_size 参数（MB）
+	if v, ok := args["max_file_size"]; ok {
+		switch n := v.(type) {
+		case float64:
+			opts.MaxFileSize = int64(n) * 1024 * 1024
+		case int:
+			opts.MaxFileSize = int64(n) * 1024 * 1024
+		}
+	}
+
+	// extensions 参数
+	if v, ok := args["extensions"]; ok {
+		if extStr, ok := v.(string); ok {
+			exts := make(map[string]bool)
+			for _, ext := range strings.Split(extStr, ",") {
+				ext = strings.TrimSpace(ext)
+				if !strings.HasPrefix(ext, ".") {
+					ext = "." + ext
+				}
+				exts[strings.ToLower(ext)] = true
+			}
+			opts.Extensions = exts
+		}
+	}
+
+	// 判断是 glob 模式还是目录
+	var result *rag.ImportResult
+	var err error
+
+	// 检查是否包含 glob 通配符
+	if strings.ContainsAny(path, "*?[") {
+		result, err = t.engine.IndexGlob(ctx, path, opts)
+	} else {
+		result, err = t.engine.IndexDirectory(ctx, path, opts)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("import failed: %w", err)
+	}
+
+	// 格式化结果
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📦 知识库导入完成\n"))
+	sb.WriteString(fmt.Sprintf("  扫描: %d 个文件\n", result.Total))
+	sb.WriteString(fmt.Sprintf("  ✅ 成功索引: %d\n", result.Indexed))
+	if result.Skipped > 0 {
+		sb.WriteString(fmt.Sprintf("  ⏭️  跳过: %d (格式不支持/已存在/过大)\n", result.Skipped))
+	}
+	if result.Failed > 0 {
+		sb.WriteString(fmt.Sprintf("  ❌ 失败: %d\n", result.Failed))
+		for _, e := range result.Errors {
+			if len(e) > 200 {
+				e = e[:200] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("    - %s\n", e))
+		}
+	}
+
+	if len(result.Documents) > 0 {
+		sb.WriteString(fmt.Sprintf("\n已索引文档:\n"))
+		for i, doc := range result.Documents {
+			if i >= 20 {
+				sb.WriteString(fmt.Sprintf("  ... 及其他 %d 个文档\n", len(result.Documents)-20))
+				break
+			}
+			sb.WriteString(fmt.Sprintf("  [%d] %s (%d 片段)\n", i+1, doc.Title, doc.ChunkCount))
+		}
+	}
+
+	stats := t.engine.Stats(ctx)
+	sb.WriteString(fmt.Sprintf("\n📚 当前索引总计: %d 文档, %d 片段, %d 字符\n",
+		stats.DocumentCount, stats.ChunkCount, stats.TotalChars))
+
+	return sb.String(), nil
+}

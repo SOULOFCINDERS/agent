@@ -72,5 +72,34 @@ func RAGToolSchemas() map[string]struct {
 				"required": ["doc_id"]
 			}`),
 		},
+		"rag_import": {
+			Desc: "批量导入知识库。支持导入整个目录或使用 glob 模式匹配文件。自动递归扫描子目录，按文件扩展名过滤，跳过已索引文件。支持的格式包括：.txt .md .go .py .js .ts .java .json .yaml .html .css .sql 等 40+ 种文本格式。",
+			Schema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"path": {
+						"type": "string",
+						"description": "要导入的目录路径或 glob 模式。目录示例: ./docs, /home/user/knowledge; Glob 示例: ./data/*.md, ./src/**/*.go"
+					},
+					"recursive": {
+						"type": "boolean",
+						"description": "是否递归扫描子目录（默认 true）"
+					},
+					"glob": {
+						"type": "string",
+						"description": "文件名匹配模式（如 *.md），仅在 path 为目录时生效"
+					},
+					"extensions": {
+						"type": "string",
+						"description": "允许的扩展名列表，逗号分隔（如 .md,.txt,.go）。不填则使用默认支持的 40+ 种格式"
+					},
+					"max_file_size": {
+						"type": "integer",
+						"description": "单文件最大大小（MB，默认 1）"
+					}
+				},
+				"required": ["path"]
+			}`),
+		},
 	}
 }

@@ -231,10 +231,11 @@ Tools:
 | `TFIDFEmbedder` | 默认，轻量本地 | 零外部依赖，hash-to-dim + L2 归一化 |
 | `APIEmbedder` | 生产环境 | OpenAI 兼容 API（支持 DashScope/Qwen/Ollama）|
 
-**4 个 RAG 工具**：
+**5 个 RAG 工具**：
 | 工具名 | 功能 | 关键参数 |
 |--------|------|----------|
-| `rag_index` | 索引文件或文本 | `file` / `content`+`title` |
+| `rag_import` | 批量导入知识库目录 | `path`(目录/glob), `recursive`, `extensions`, `glob` |
+| `rag_index` | 索引单个文件或文本 | `file` / `content`+`title` |
 | `rag_query` | 语义检索 | `query`, `top_k`(默认5) |
 | `rag_list` | 列出已索引文档 | 无 |
 | `rag_delete` | 删除已索引文档 | `doc_id` |
@@ -243,6 +244,13 @@ Tools:
 ```bash
 # 启用 RAG（使用默认 TF-IDF 嵌入）
 agent chat --rag
+
+# 启动时自动加载知识库目录
+agent chat --rag-load ./docs
+
+# 使用 chromem-go 后端 + DashScope 嵌入
+export DASHSCOPE_API_KEY=sk-xxx
+agent chat --rag --rag-backend chromem
 
 # 指定索引目录
 agent chat --rag --rag-dir /path/to/index
@@ -260,9 +268,22 @@ agent chat --rag --rag-dir /path/to/index
 - `Config.EmbeddingModel string` — 预留 API 嵌入模型名
 - `App.RAGEngine *rag.Engine` — 注入的 RAG 引擎实例
 
+**知识库批量导入**：
+- `IndexDirectory()` — 递归扫描目录，按扩展名过滤，跳过隐藏目录/node_modules/vendor
+- `IndexGlob()` — 按 glob 模式匹配文件（如 `./docs/*.md`）
+- 默认支持 40+ 种文本格式：`.txt .md .go .py .js .ts .java .json .yaml .html .sql` 等
+- 自动跳过已索引文件、空文件、超大文件（默认 1MB 上限）
+- 导入选项：`Recursive`(递归), `Extensions`(扩展名过滤), `GlobPattern`(模式匹配), `MaxFileSize`(大小限制)
+
+**向量存储后端**：
+| 后端 | 启用方式 | 特点 |
+|------|----------|------|
+| Legacy (默认) | `--rag` | 零依赖 TF-IDF，JSON 持久化，适合开发测试 |
+| chromem-go | `--rag --rag-backend chromem` | 内置 OpenAI/DashScope/Ollama 嵌入，gob+gzip 持久化，生产推荐 |
+
 **System Prompt 规则**（RAG 启用时追加）：
 - 用户要求索引文件/文本时调用 `rag_index`
 - 回答问题前先调用 `rag_query` 检索相关知识
 - 检索到相关内容时标注"基于已索引知识"
 
-**测试**：`go test ./internal/rag/... -v`（13 个测试覆盖全部组件）
+**测试**：`go test ./internal/rag/... -v`（18 个测试覆盖全部组件 + 批量导入）

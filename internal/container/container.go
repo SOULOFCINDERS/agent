@@ -168,6 +168,7 @@ func Build(cfg Config) (*App, error) {
 		app.Registry.Register(tools.NewRAGQueryTool(app.RAGEngine))
 		app.Registry.Register(tools.NewRAGListTool(app.RAGEngine))
 		app.Registry.Register(tools.NewRAGDeleteTool(app.RAGEngine))
+		app.Registry.Register(tools.NewRAGImportTool(app.RAGEngine))
 	}
 
 	// 3. LLM 客户端
