@@ -14,6 +14,7 @@ import (
 
 	"github.com/SOULOFCINDERS/agent/internal/agent"
 	"github.com/SOULOFCINDERS/agent/internal/container"
+	sessionPkg "github.com/SOULOFCINDERS/agent/internal/session"
 	"github.com/SOULOFCINDERS/agent/internal/executor"
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 	"github.com/SOULOFCINDERS/agent/internal/planner"
@@ -37,6 +38,8 @@ func realMain() int {
 		return chatCmd(os.Args[2:])
 	case "web":
 		return webCmd(os.Args[2:])
+	case "sessions":
+		return sessionsCmd(os.Args[2:])
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -48,9 +51,10 @@ func printUsage() {
 	_, _ = fmt.Fprintln(os.Stderr, `usage: agent <command> [args]
 
 commands:
-  run    run agent on a single task (rule-based planner)
-  chat   start interactive chat with LLM-powered agent
-  web    start web UI with HTTP server
+  run       run agent on a single task (rule-based planner)
+  chat      start interactive chat with LLM-powered agent
+  web       start web UI with HTTP server
+  sessions  list or manage saved conversation sessions
 
 chat options:
   --trace           print trace events to stderr
@@ -63,7 +67,9 @@ chat options:
   --feishu          enable Feishu doc tools (requires env FEISHU_APP_ID, FEISHU_APP_SECRET)
   --budget N        set token budget limit (0 = unlimited, default: 0)
   --multi-agent     enable multi-agent mode (orchestrator + sub-agents)
-  --ctx-window N    override context window size (tokens)`)
+  --ctx-window N    override context window size (tokens)
+  --resume ID       resume a previous conversation session
+  --session-dir DIR session storage directory (default: <root>/.agent-sessions)`)
 }
 
 // ---------- run 命令（保留原有功能，不经过 Container） ----------
@@ -163,6 +169,22 @@ func runCmd(args []string) int {
 // ---------- chat 命令（通过 Container 装配） ----------
 
 func chatCmd(args []string) int {
+	// Extract --resume flag before common parsing
+	var resumeID string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--resume" && i+1 < len(args) {
+			resumeID = args[i+1]
+			// Remove from args so parseCommonFlags ignores it
+			args = append(args[:i], args[i+2:]...)
+			break
+		}
+		if strings.HasPrefix(args[i], "--resume=") {
+			resumeID = strings.TrimPrefix(args[i], "--resume=")
+			args = append(args[:i], args[i+1:]...)
+			break
+		}
+	}
+
 	cfg := parseCommonFlags(args)
 
 	if cfg.FeishuMode {
@@ -187,7 +209,23 @@ func chatCmd(args []string) int {
 	// 打印启动信息
 	printStartupInfo(app)
 
-	return runChatLoop(app.ChatAgent(), cfg.StreamMode, app.UsageTracker)
+	// 会话管理
+	var sess *sessionPkg.Session
+	var history []llm.Message
+	if resumeID != "" && app.SessionManager != nil {
+		var err error
+		sess, history, err = app.SessionManager.LoadHistory(context.Background(), resumeID)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "⚠️  无法恢复会话 %s: %v\n", resumeID, err)
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "📂 已恢复会话: %s (%s, %d 轮对话)\n", sess.ID, sess.Title, sess.Metadata.TurnCount)
+		}
+	}
+	if sess == nil && app.SessionManager != nil {
+		sess = app.SessionManager.NewSession()
+	}
+
+	return runChatLoopWithSession(app.ChatAgent(), cfg.StreamMode, app.UsageTracker, app.SessionManager, sess, history)
 }
 
 // ---------- web 命令（通过 Container 装配） ----------
@@ -277,6 +315,13 @@ func parseCommonFlags(args []string) container.Config {
 			}
 		case strings.HasPrefix(a, "--mem-dir="):
 			cfg.MemDir = strings.TrimPrefix(a, "--mem-dir=")
+		case a == "--session-dir":
+			if i+1 < len(args) {
+				i++
+				cfg.SessionDir = args[i]
+			}
+		case strings.HasPrefix(a, "--session-dir="):
+			cfg.SessionDir = strings.TrimPrefix(a, "--session-dir=")
 		case a == "--root":
 			if i+1 < len(args) {
 				i++
@@ -347,18 +392,117 @@ func printStartupInfo(app *container.App) {
 	}
 }
 
-// runChatLoop 交互式对话循环
-func runChatLoop(ca container.ChatAgent, streamMode bool, usageTracker *llm.UsageTracker) int {
+
+// ---------- sessions 命令 ----------
+
+func sessionsCmd(args []string) int {
+	root := "."
+	sessionDir := ""
+	deleteID := ""
+
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--root":
+			if i+1 < len(args) {
+				i++
+				root = args[i]
+			}
+		case strings.HasPrefix(args[i], "--root="):
+			root = strings.TrimPrefix(args[i], "--root=")
+		case args[i] == "--session-dir":
+			if i+1 < len(args) {
+				i++
+				sessionDir = args[i]
+			}
+		case strings.HasPrefix(args[i], "--session-dir="):
+			sessionDir = strings.TrimPrefix(args[i], "--session-dir=")
+		case args[i] == "--delete":
+			if i+1 < len(args) {
+				i++
+				deleteID = args[i]
+			}
+		case strings.HasPrefix(args[i], "--delete="):
+			deleteID = strings.TrimPrefix(args[i], "--delete=")
+		}
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "resolve root: %v\n", err)
+		return 1
+	}
+	if sessionDir == "" {
+		sessionDir = filepath.Join(absRoot, ".agent-sessions")
+	}
+
+	store, err := sessionPkg.NewJSONStore(sessionDir)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "session store: %v\n", err)
+		return 1
+	}
+	mgr := sessionPkg.NewManager(store)
+	ctx := context.Background()
+
+	// Delete mode
+	if deleteID != "" {
+		if err := mgr.Delete(ctx, deleteID); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "❌ 删除失败: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "🗑️  已删除会话: %s\n", deleteID)
+		return 0
+	}
+
+	// List mode
+	summaries, err := mgr.List(ctx, 20)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "list sessions: %v\n", err)
+		return 1
+	}
+
+	if len(summaries) == 0 {
+		_, _ = fmt.Fprintln(os.Stdout, "📭 暂无保存的会话")
+		return 0
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "\n📋 保存的会话 (%d 个):\n\n", len(summaries))
+	_, _ = fmt.Fprintf(os.Stdout, "%-24s  %-6s  %-20s  %s\n", "ID", "轮次", "更新时间", "标题")
+	_, _ = fmt.Fprintln(os.Stdout, strings.Repeat("─", 80))
+	for _, s := range summaries {
+		_, _ = fmt.Fprintf(os.Stdout, "%-24s  %-6d  %-20s  %s\n",
+			s.ID, s.TurnCount,
+			s.UpdatedAt.Format("2006-01-02 15:04:05"),
+			s.Title)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "\n💡 恢复会话: agent chat --resume <ID>\n")
+	_, _ = fmt.Fprintf(os.Stdout, "🗑️  删除会话: agent sessions --delete <ID>\n\n")
+
+	return 0
+}
+
+// ---------- 带会话持久化的对话循环 ----------
+
+func runChatLoopWithSession(ca container.ChatAgent, streamMode bool, usageTracker *llm.UsageTracker, sessMgr *sessionPkg.Manager, sess *sessionPkg.Session, history []llm.Message) int {
 	_, _ = fmt.Fprintln(os.Stdout, "")
 	_, _ = fmt.Fprintln(os.Stdout, "╔══════════════════════════════════════════╗")
 	_, _ = fmt.Fprintln(os.Stdout, "║       🤖 Agent Chat (输入 quit 退出)      ║")
 	_, _ = fmt.Fprintln(os.Stdout, "╚══════════════════════════════════════════╝")
+	if sess != nil {
+		_, _ = fmt.Fprintf(os.Stdout, "  📝 会话: %s\n", sess.ID)
+	}
 	_, _ = fmt.Fprintln(os.Stdout, "")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	var history []llm.Message
+	saveSession := func() {
+		if sessMgr != nil && sess != nil {
+			ctx := context.Background()
+			if err := sessMgr.SaveHistory(ctx, sess, history); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "⚠️  会话保存失败: %v\n", err)
+			}
+		}
+	}
 
 	for {
 		_, _ = fmt.Fprint(os.Stdout, "你: ")
@@ -370,11 +514,18 @@ func runChatLoop(ca container.ChatAgent, streamMode bool, usageTracker *llm.Usag
 			continue
 		}
 		if input == "quit" || input == "exit" || input == "q" {
-			_, _ = fmt.Fprintf(os.Stdout, "\n👋 再见! 本次会话 %s\n", usageTracker.Summary())
+			saveSession()
+			if sess != nil {
+				_, _ = fmt.Fprintf(os.Stdout, "\n💾 会话已保存: %s\n", sess.ID)
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "👋 再见! 本次会话 %s\n", usageTracker.Summary())
 			break
 		}
 		if input == "clear" || input == "reset" {
 			history = nil
+			if sess != nil {
+				sess = sessMgr.NewSession()
+			}
 			_, _ = fmt.Fprintln(os.Stdout, "🔄 对话已重置")
 			continue
 		}
@@ -412,6 +563,9 @@ func runChatLoop(ca container.ChatAgent, streamMode bool, usageTracker *llm.Usag
 			history = newHistory
 			_, _ = fmt.Fprintf(os.Stdout, "\nAgent: %s\n  [%s]\n\n", reply, usageTracker.Summary())
 		}
+
+		// Auto-save after each turn
+		saveSession()
 	}
 
 	return 0

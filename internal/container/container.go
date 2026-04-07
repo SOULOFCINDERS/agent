@@ -16,6 +16,7 @@ import (
 	"github.com/SOULOFCINDERS/agent/internal/ctxwindow"
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 	mcpinfra "github.com/SOULOFCINDERS/agent/internal/mcp"
+	"github.com/SOULOFCINDERS/agent/internal/session"
 	"github.com/SOULOFCINDERS/agent/internal/memory"
 	"github.com/SOULOFCINDERS/agent/internal/multiagent"
 	"github.com/SOULOFCINDERS/agent/internal/tools"
@@ -40,7 +41,8 @@ type Config struct {
 
 	// 路径与地址
 	Root   string // 工具根目录
-	MemDir string // 记忆存储路径
+	MemDir     string // 记忆存储路径
+	SessionDir string // 会话持久化目录
 	Addr   string // Web 服务监听地址
 
 	// 资源配置
@@ -70,7 +72,8 @@ type App struct {
 	TraceWriter    io.Writer
 
 	Guardrails *guardrail.GuardPipeline
-	MCPManager *mcpinfra.MCPManager
+	MCPManager     *mcpinfra.MCPManager
+	SessionManager *session.Manager
 
 	Config Config
 }
@@ -125,6 +128,17 @@ func Build(cfg Config) (*App, error) {
 		app.Registry.Register(tools.NewSearchMemoryTool(app.MemStore))
 		app.Registry.Register(tools.NewDeleteMemoryTool(app.MemStore))
 	}
+
+	// 2.5 会话持久化
+	sessDir := cfg.SessionDir
+	if sessDir == "" {
+		sessDir = filepath.Join(absRoot, ".agent-sessions")
+	}
+	sessStore, err := session.NewJSONStore(sessDir)
+	if err != nil {
+		return nil, fmt.Errorf("session store: %w", err)
+	}
+	app.SessionManager = session.NewManager(sessStore)
 
 	// 3. LLM 客户端
 	if cfg.Mock {

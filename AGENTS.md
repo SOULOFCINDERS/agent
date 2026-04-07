@@ -47,6 +47,8 @@ go run ./cmd/agent web --mock --addr :8080  # 启动 Web UI
 | `internal/guardrail/` | Infrastructure | 安全检查实现 (PII/关键词/注入/长度) | domain/guardrail |
 | `internal/domain/mcp/` | Domain | MCP 协议接口：Client、Manager、ServerConfig、DiscoveredTool | 仅标准库 |
 | `internal/mcp/` | Infrastructure | MCP 实现：Stdio/SSE Client、MCPManager、MCPToolAdapter | domain/mcp + domain/tool |
+| `internal/domain/session/` | Domain | 会话持久化接口：Session、Summary、Store | 仅标准库 |
+| `internal/session/` | Infrastructure | 会话持久化实现：JSONStore（文件存储）、Manager | domain/session + domain/conversation |
 | `internal/structured/` | Infrastructure | 结构化输出引擎实现 | domain/structured |
 | `cmd/agent/` | Entry | CLI 入口，参数解析 | container + presenter |
 
@@ -109,6 +111,30 @@ Harness 层在 3 个阶段执行安全检查，通过 `gd.Pipeline` 链式调用
 - `LengthGuard` — 输入长度限制 → Block
 
 启用方式：`container.Config{GuardrailMode: true}`
+
+### 会话持久化 (Conversation Persistence)
+支持将多轮对话完整保存到磁盘，并在后续会话中恢复。每个 Session 独立存储为 JSON 文件。
+
+**核心组件**：
+- `Session` — 包含 ID、标题、消息历史、元数据的聚合根
+- `JSONStore` — 基于文件系统的持久化实现（每个会话一个 `.json` 文件）
+- `Manager` — 协调会话生命周期，负责 `conv.Message` 与 `session.Message` 的转换
+
+**CLI 用法**：
+```bash
+agent chat                    # 自动创建新会话并保存
+agent chat --resume <ID>      # 恢复之前的会话继续对话
+agent sessions                # 列出所有保存的会话
+agent sessions --delete <ID>  # 删除指定会话
+```
+
+**行为**：
+- 每轮对话自动保存（无需手动操作）
+- 标题从首条用户消息自动生成（截断至 40 字符）
+- `clear`/`reset` 会创建新会话
+- 退出时显示会话 ID，方便后续恢复
+
+**存储路径**：`<root>/.agent-sessions/`（可通过 `--session-dir` 覆盖）
 
 ### MCP (Model Context Protocol) 集成
 MCP 是 Anthropic 提出的开放协议，允许 Agent 动态发现和调用外部工具。本项目使用官方 Go SDK（`github.com/modelcontextprotocol/go-sdk`）。
