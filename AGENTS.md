@@ -48,7 +48,9 @@ go run ./cmd/agent web --mock --addr :8080  # 启动 Web UI
 | `internal/domain/mcp/` | Domain | MCP 协议接口：Client、Manager、ServerConfig、DiscoveredTool | 仅标准库 |
 | `internal/mcp/` | Infrastructure | MCP 实现：Stdio/SSE Client、MCPManager、MCPToolAdapter | domain/mcp + domain/tool |
 | `internal/domain/session/` | Domain | 会话持久化接口：Session、Summary、Store | 仅标准库 |
+| `internal/domain/rag/` | Domain | RAG 接口：Embedder、Chunker、VectorStore + 值对象 | 仅标准库 |
 | `internal/session/` | Infrastructure | 会话持久化实现：JSONStore（文件存储）、Manager | domain/session + domain/conversation |
+| `internal/rag/` | Infrastructure | RAG 实现：Engine、TextChunker、TFIDFEmbedder、APIEmbedder、MemoryVectorStore | domain/rag |
 | `internal/structured/` | Infrastructure | 结构化输出引擎实现 | domain/structured |
 | `cmd/agent/` | Entry | CLI 入口，参数解析 | container + presenter |
 
@@ -200,3 +202,67 @@ Container.Build()
 - `ManagerConfig.ColdThreshold` — cache 冷热阈值（默认 5 分钟）
 - `ManagerConfig.ColdAggressiveRatio` — 冷启动截断比例（默认 0.5）
 - `NudgeThreshold` / `NudgeCriticalThreshold` — Nudge 触发阈值常量
+
+### RAG (检索增强生成)
+为 Agent 提供外部知识检索能力，支持索引文件/文本并在对话中基于语义相似度检索相关片段注入 prompt。
+
+**架构**：
+```
+Domain 层:  internal/domain/rag/rag.go    — Embedder/Chunker/VectorStore 接口 + 值对象
+Infrastructure:
+  internal/rag/chunker.go   — TextChunker (递归段落→句子→字符切分)
+  internal/rag/embedder.go  — TFIDFEmbedder (零依赖) / APIEmbedder (OpenAI 兼容)
+  internal/rag/store.go     — MemoryVectorStore (内存余弦搜索 + JSON 持久化)
+  internal/rag/engine.go    — Engine 编排器 (索引/查询/格式化)
+Tools:
+  internal/tools/rag_tool.go   — 4 个 RAG 工具实现
+  internal/tools/rag_schema.go — JSON Schema 定义
+```
+
+**Domain 接口** (`internal/domain/rag/rag.go`)：
+- `Embedder` — 文本向量化（`Embed`, `EmbedBatch`, `Dimension`）
+- `Chunker` — 文本切块（`Split(text, chunkSize, overlap)`）
+- `VectorStore` — 向量存储（`AddDocument`, `Query`, `Delete`, `Save/Load`）
+- 值对象：`Document`, `Chunk`, `QueryResult`, `IndexStats`
+
+**Embedding 策略**：
+| 实现 | 场景 | 依赖 |
+|------|------|------|
+| `TFIDFEmbedder` | 默认，轻量本地 | 零外部依赖，hash-to-dim + L2 归一化 |
+| `APIEmbedder` | 生产环境 | OpenAI 兼容 API（支持 DashScope/Qwen/Ollama）|
+
+**4 个 RAG 工具**：
+| 工具名 | 功能 | 关键参数 |
+|--------|------|----------|
+| `rag_index` | 索引文件或文本 | `file` / `content`+`title` |
+| `rag_query` | 语义检索 | `query`, `top_k`(默认5) |
+| `rag_list` | 列出已索引文档 | 无 |
+| `rag_delete` | 删除已索引文档 | `doc_id` |
+
+**CLI 用法**：
+```bash
+# 启用 RAG（使用默认 TF-IDF 嵌入）
+agent chat --rag
+
+# 指定索引目录
+agent chat --rag --rag-dir /path/to/index
+
+# 对话中 Agent 自动使用 RAG 工具：
+#   用户: "请索引 ./docs 目录下的 README.md"
+#   Agent: 调用 rag_index → 文件被切块、嵌入、存储
+#   用户: "Go 的并发模型是什么？"
+#   Agent: 调用 rag_query → 检索相关片段 → 结合知识回答
+```
+
+**Container 集成**：
+- `Config.RAGMode bool` — 启用 RAG
+- `Config.RAGDir string` — 索引持久化目录（默认 `~/.agent-rag`）
+- `Config.EmbeddingModel string` — 预留 API 嵌入模型名
+- `App.RAGEngine *rag.Engine` — 注入的 RAG 引擎实例
+
+**System Prompt 规则**（RAG 启用时追加）：
+- 用户要求索引文件/文本时调用 `rag_index`
+- 回答问题前先调用 `rag_query` 检索相关知识
+- 检索到相关内容时标注"基于已索引知识"
+
+**测试**：`go test ./internal/rag/... -v`（13 个测试覆盖全部组件）

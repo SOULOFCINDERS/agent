@@ -88,6 +88,22 @@ func NewLoopAgent(client llm.Client, reg *tools.Registry, systemPrompt string, t
 		})
 	}
 
+	// 添加 RAG 工具 schema（如果已注册）
+	ragSchemas := tools.RAGToolSchemas()
+	for name, s := range ragSchemas {
+		if reg.Get(name) == nil {
+			continue
+		}
+		defs = append(defs, llm.ToolDef{
+			Type: "function",
+			Function: llm.FuncDef{
+				Name:        name,
+				Description: s.Desc,
+				Parameters:  s.Schema,
+			},
+		})
+	}
+
 	return &LoopAgent{
 		llmClient:    client,
 		registry:     reg,

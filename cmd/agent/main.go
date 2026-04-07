@@ -69,7 +69,9 @@ chat options:
   --multi-agent     enable multi-agent mode (orchestrator + sub-agents)
   --ctx-window N    override context window size (tokens)
   --resume ID       resume a previous conversation session
-  --session-dir DIR session storage directory (default: <root>/.agent-sessions)`)
+  --session-dir DIR session storage directory (default: <root>/.agent-sessions)
+  --rag             enable RAG (Retrieval-Augmented Generation) for document indexing and retrieval
+  --rag-dir DIR     RAG index storage directory (default: <root>/.agent-rag)`)
 }
 
 // ---------- run 命令（保留原有功能，不经过 Container） ----------
@@ -290,6 +292,15 @@ func parseCommonFlags(args []string) container.Config {
 			cfg.FeishuMode = true
 		case a == "--memory":
 			cfg.MemoryMode = true
+		case a == "--rag":
+			cfg.RAGMode = true
+		case a == "--rag-dir":
+			if i+1 < len(args) {
+				i++
+				cfg.RAGDir = args[i]
+			}
+		case strings.HasPrefix(a, "--rag-dir="):
+			cfg.RAGDir = strings.TrimPrefix(a, "--rag-dir=")
 		case a == "--budget":
 			if i+1 < len(args) {
 				i++
@@ -386,6 +397,10 @@ func printStartupInfo(app *container.App) {
 		_, _ = fmt.Fprintf(os.Stderr, "📊 Token 预算: %d\n", cfg.Budget)
 	} else {
 		_, _ = fmt.Fprintln(os.Stderr, "📊 Token 用量追踪已启用 (无预算限制)")
+	}
+	if app.RAGEngine != nil {
+		stats := app.RAGEngine.Stats(context.Background())
+		_, _ = fmt.Fprintf(os.Stderr, "📚 RAG 知识库已启用 (%d 文档, %d 片段)\n", stats.DocumentCount, stats.ChunkCount)
 	}
 	if app.Orchestrator != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "🤝 Multi-Agent 模式已启用\n")

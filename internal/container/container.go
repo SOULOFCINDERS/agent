@@ -17,6 +17,7 @@ import (
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 	mcpinfra "github.com/SOULOFCINDERS/agent/internal/mcp"
 	"github.com/SOULOFCINDERS/agent/internal/session"
+	"github.com/SOULOFCINDERS/agent/internal/rag"
 	"github.com/SOULOFCINDERS/agent/internal/memory"
 	"github.com/SOULOFCINDERS/agent/internal/multiagent"
 	"github.com/SOULOFCINDERS/agent/internal/tools"
@@ -38,11 +39,13 @@ type Config struct {
 	MultiAgentMode bool
 	GuardrailMode  bool
 	StreamMode     bool
+	RAGMode        bool
 
 	// 路径与地址
 	Root   string // 工具根目录
 	MemDir     string // 记忆存储路径
 	SessionDir string // 会话持久化目录
+	RAGDir     string // RAG 索引存储目录
 	Addr   string // Web 服务监听地址
 
 	// 资源配置
@@ -50,6 +53,7 @@ type Config struct {
 	BlockKeywords  []guardrail.KeywordRule // 敏感词规则（可选）
 	MaxInputChars  int                     // 输入最大字符数（0=不限）
 	CtxWindow int   // 上下文窗口大小覆盖
+	EmbeddingModel string // RAG embedding 模型名（可选）
 
 	MCPServers []dmcp.ServerConfig // MCP Server 连接列表（可选）
 	// 运行时
@@ -74,6 +78,7 @@ type App struct {
 	Guardrails *guardrail.GuardPipeline
 	MCPManager     *mcpinfra.MCPManager
 	SessionManager *session.Manager
+	RAGEngine      *rag.Engine
 
 	Config Config
 }
@@ -93,7 +98,10 @@ const DefaultSystemPrompt = `你是一个智能助手，可以使用各种工具
 7. 保存记忆时用第三人称描述（如"用户喜欢..."），topic 要简洁
 8. 当用户询问最新信息、新闻、或你不确定的事实时，使用 web_search 搜索
 9. 搜索后如需详细内容，用 web_fetch 抓取具体网页
-10. 搜索结果要注明来源链接`
+10. 搜索结果要注明来源链接
+11. 当用户要求对文件或文本建立知识库索引时，使用 rag_index 工具
+12. 当用户询问已索引文档的内容时，优先使用 rag_query 检索相关片段
+13. 使用 rag_list 查看已索引的文档列表`
 
 // Build 根据配置装配所有依赖，返回 App
 func Build(cfg Config) (*App, error) {
@@ -139,6 +147,28 @@ func Build(cfg Config) (*App, error) {
 		return nil, fmt.Errorf("session store: %w", err)
 	}
 	app.SessionManager = session.NewManager(sessStore)
+
+	// 2.8 RAG 引擎
+	if cfg.RAGMode {
+		ragDir := cfg.RAGDir
+		if ragDir == "" {
+			ragDir = filepath.Join(absRoot, ".agent-rag")
+		}
+		ragCfg := rag.EngineConfig{
+			DataDir:   ragDir,
+			ChunkSize: 500,
+			Overlap:   50,
+		}
+		// 如果配置了 embedding 模型，使用 API embedder（延迟到 LLM 客户端创建后）
+		app.RAGEngine, err = rag.NewEngine(ragCfg)
+		if err != nil {
+			return nil, fmt.Errorf("rag engine: %w", err)
+		}
+		app.Registry.Register(tools.NewRAGIndexTool(app.RAGEngine))
+		app.Registry.Register(tools.NewRAGQueryTool(app.RAGEngine))
+		app.Registry.Register(tools.NewRAGListTool(app.RAGEngine))
+		app.Registry.Register(tools.NewRAGDeleteTool(app.RAGEngine))
+	}
 
 	// 3. LLM 客户端
 	if cfg.Mock {
