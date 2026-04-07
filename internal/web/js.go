@@ -412,20 +412,20 @@ func buildAppJS() string {
         if (!text) return '';
         var html = escapeHtml(text);
         // code blocks
-        html = html.replace(/` + "`" + `{3}(\\w*)\\n([\\s\\S]*?)` + "`" + `{3}/g, function(match, lang, code) {
+        html = html.replace(/` + "`" + `{3}(\w*)\n([\s\S]*?)` + "`" + `{3}/g, function(match, lang, code) {
             return '<pre><code class="lang-' + lang + '">' + code + '</code></pre>';
         });
         html = html.replace(/` + "`" + `([^` + "`" + `]+)` + "`" + `/g, '<code>$1</code>');
-        html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
-        html = html.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
-        html = html.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
         html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
         html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
         html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>');
-        html = html.replace(/\\n{2,}/g, '</p><p>');
-        html = html.replace(/\\n/g, '<br>');
+        html = html.replace(/\n{2,}/g, '</p><p>');
+        html = html.replace(/\n/g, '<br>');
         html = '<p>' + html + '</p>';
-        html = html.replace(/<p>\\s*<\\/p>/g, '');
+        html = html.replace(/<p>\s*<\/p>/g, '');
         return html;
     }
 
@@ -451,12 +451,12 @@ func buildAppJS() string {
         activeToolCards = {};
         chatContainer.innerHTML =
             '<div class="welcome-msg">' +
-            '<div class="welcome-icon">\\ud83e\\udd16</div>' +
+            '<div class="welcome-icon">🤖</div>' +
             '<h2>Agent Chat</h2>' +
             '<p>Ready to assist!</p>' +
             '<div class="quick-actions">' +
-            "<button class=\\"quick-btn\\" onclick=\\"sendQuick('\\u5217\\u51fa\\u5f53\\u524d\\u76ee\\u5f55')\\">\\ud83d\\udcc2 \\u5217\\u51fa\\u76ee\\u5f55</button>" +
-            "<button class=\\"quick-btn\\" onclick=\\"sendQuick('\\u8ba1\\u7b97 (123+456)*789')\\">\\ud83e\\uddee \\u8ba1\\u7b97</button>" +
+            '<button class="quick-btn" onclick="sendQuick(\x27列出当前目录\x27)">📂 列出目录</button>' +
+            '<button class="quick-btn" onclick="sendQuick(\x27计算 (123+456)*789\x27)">🧮 计算</button>' +
             '</div></div>';
         updateContextInfo({
             max_input_tokens: 0, estimated_tokens: 0, usage_percent: 0,
