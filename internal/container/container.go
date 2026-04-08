@@ -14,6 +14,7 @@ import (
 	dmcp "github.com/SOULOFCINDERS/agent/internal/domain/mcp"
 	"github.com/SOULOFCINDERS/agent/internal/guardrail"
 	"github.com/SOULOFCINDERS/agent/internal/ctxwindow"
+	"strings"
 	"time"
 
 	"github.com/SOULOFCINDERS/agent/internal/persist"
@@ -42,6 +43,7 @@ type Config struct {
 	MultiAgentMode bool
 	GuardrailMode  bool
 	StreamMode     bool
+	VerifyMode     bool   // 启用 Verification Agent
 	RAGMode        bool
 
 	// 路径与地址
@@ -126,6 +128,30 @@ func BuildDefaultSystemPrompt() string {
 6. 当用户要求对文件或文本建立知识库索引时，使用 rag_index 工具
 7. 当用户询问已索引文档的内容时，优先使用 rag_query 检索相关片段
 8. 使用 rag_list 查看已索引的文档列表`, dateStr, weekday)
+}
+
+// AppendToolBoundary 根据已注册的工具列表，向 System Prompt 追加能力边界声明
+// 明确告知 LLM 只能使用列出的工具，禁止声称拥有未列出的能力
+func AppendToolBoundary(prompt string, toolNames []string) string {
+	if len(toolNames) == 0 {
+		return prompt
+	}
+	var sb strings.Builder
+	sb.WriteString(prompt)
+	sb.WriteString("\n\n## 能力边界（严格遵守）\n")
+	sb.WriteString("你只能使用以下工具，不能声称拥有未列出的能力：\n")
+	for _, name := range toolNames {
+		sb.WriteString("- ")
+		sb.WriteString(name)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n**禁止行为：**\n")
+	sb.WriteString("- 不要声称你可以生成图片、音频、视频（除非上面列出了对应工具）\n")
+	sb.WriteString("- 不要声称你可以发送邮件、创建日历事件（除非上面列出了对应工具）\n")
+	sb.WriteString("- 不要声称你可以直接访问数据库或API（除非上面列出了对应工具）\n")
+	sb.WriteString("- 如果用户要求的功能不在上述工具列表中，请如实告知：\"抱歉，我目前没有这个能力\"\n")
+	sb.WriteString("- **引用来源时，只能使用工具实际返回的 URL，绝不能自行编造链接**\n")
+	return sb.String()
 }
 
 // Build 根据配置装配所有依赖，返回 App
@@ -241,6 +267,18 @@ func Build(cfg Config) (*App, error) {
 	}
 
 	// 7. LoopAgent
+	// P0: 动态追加工具能力边界声明
+	{
+		var registeredTools []string
+		schemas := tools.BuiltinSchemas()
+		for name := range schemas {
+			if app.Registry.Get(name) != nil {
+				registeredTools = append(registeredTools, name)
+			}
+		}
+		cfg.SystemPrompt = AppendToolBoundary(cfg.SystemPrompt, registeredTools)
+	}
+
 	app.LoopAgent = agent.NewLoopAgent(
 		app.LLMClient, app.Registry, cfg.SystemPrompt,
 		cfg.TraceWriter, app.MemStore, app.Compressor,
@@ -249,6 +287,13 @@ func Build(cfg Config) (*App, error) {
 	// 7.1 注入 Guardrails
 	if app.Guardrails != nil {
 		app.LoopAgent.SetGuardrails(app.Guardrails)
+	}
+
+	// 7.2 注入 Verification Agent
+	if cfg.VerifyMode {
+		verifier := agent.NewVerifier(app.LLMClient)
+		app.LoopAgent.SetVerifier(verifier)
+		log.Printf("🔍 Verification Agent 已启用")
 	}
 
 	// 8. 上下文窗口管理

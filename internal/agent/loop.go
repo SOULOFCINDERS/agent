@@ -31,6 +31,7 @@ type LoopAgent struct {
 	ctxManager      *ctxwindow.Manager       // 上下文窗口管理器（基础）
 	smartCtxManager *ctxwindow.SmartManager  // 增强版上下文窗口管理器（支持摘要压缩）
 	guardrails      gd.Pipeline              // 安全检查管道（可选）
+	verifier        *Verifier                // 验证子 Agent（可选）
 	enableNudge     bool                     // Phase 1: 是否启用 Nudge 上下文效率提醒
 }
 
@@ -277,6 +278,35 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 				}
 			}
 
+			// P0: 虚构链接检测 — 移除回复中未在工具结果中出现过的 URL
+			if fabricated := detectFabricatedURLs(finalContent, history); len(fabricated) > 0 {
+				a.traceLog("fabricated_urls_detected", map[string]any{"count": len(fabricated), "urls": fabricated})
+				finalContent = cleanFabricatedURLs(finalContent, fabricated)
+				history[len(history)-1] = llm.Message{Role: "assistant", Content: finalContent}
+			}
+
+			// Verification Agent: 独立对抗性验证
+			if a.verifier != nil && a.verifier.IsEnabled() && NeedsVerification(userMessage, finalContent, history) {
+				vResult, vErr := a.verifier.Verify(ctx, userMessage, finalContent, history)
+				if vErr != nil {
+					a.traceLog("verifier_error", map[string]any{"error": vErr.Error()})
+				} else {
+					a.traceLog("verifier_result", map[string]any{
+						"passed":   vResult.Passed,
+						"issues":   len(vResult.Issues),
+						"duration": vResult.Duration.Milliseconds(),
+					})
+					if !vResult.Passed {
+						corrected, cErr := a.verifier.ApplyCorrection(ctx, userMessage, finalContent, vResult, history)
+						if cErr == nil && corrected != finalContent {
+							a.traceLog("verifier_corrected", map[string]any{"original_len": len(finalContent), "corrected_len": len(corrected)})
+							finalContent = corrected
+							history[len(history)-1] = llm.Message{Role: "assistant", Content: finalContent}
+						}
+					}
+				}
+			}
+
 			// Guardrail: 输出安全检查
 			if a.guardrails != nil {
 				gr := a.guardrails.Run(ctx, gd.PhaseOutput, finalContent)
@@ -435,6 +465,16 @@ func (a *LoopAgent) traceLog(event string, data map[string]any) {
 	}
 	b, _ := json.Marshal(entry)
 	_, _ = fmt.Fprintf(a.trace, "%s\n", b)
+}
+
+// SetVerifier 设置验证子 Agent（Verification Agent）
+func (a *LoopAgent) SetVerifier(v *Verifier) {
+	a.verifier = v
+}
+
+// GetVerifier 返回验证子 Agent
+func (a *LoopAgent) GetVerifier() *Verifier {
+	return a.verifier
 }
 
 // SetGuardrails 设置安全检查管道

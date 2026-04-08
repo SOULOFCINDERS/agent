@@ -73,6 +73,7 @@ chat options:
   --api-key KEY     LLM API key (or env LLM_API_KEY)
   --model NAME      LLM model name (or env LLM_MODEL)
   --stream          enable streaming output (token-by-token)
+  --verify          enable Verification Agent (anti-hallucination)
   --search          enable web search tools (web_search + web_fetch)
   --feishu          enable Feishu doc tools (requires env FEISHU_APP_ID, FEISHU_APP_SECRET)
   --budget N        set token budget limit (0 = unlimited, default: 0)
@@ -322,6 +323,8 @@ func parseCommonFlags(args []string) container.Config {
 			cfg.FeishuMode = true
 		case a == "--memory":
 			cfg.MemoryMode = true
+		case a == "--verify":
+			cfg.VerifyMode = true
 		case a == "--rag":
 			cfg.RAGMode = true
 		case a == "--rag-dir":
@@ -443,6 +446,9 @@ func printStartupInfo(app *container.App) {
 		_, _ = fmt.Fprintf(os.Stderr, "📊 Token 预算: %d\n", cfg.Budget)
 	} else {
 		_, _ = fmt.Fprintln(os.Stderr, "📊 Token 用量追踪已启用 (无预算限制)")
+	}
+	if cfg.VerifyMode {
+		_, _ = fmt.Fprintln(os.Stderr, "🔍 Verification Agent 已启用")
 	}
 	if app.RAGEngine != nil {
 		stats := app.RAGEngine.Stats(context.Background())
