@@ -79,6 +79,19 @@ func (a *LoopAgent) ChatStreamV2(ctx context.Context, userMessage string, histor
 		StreamChat(ctx context.Context, messages []llm.Message, tools []llm.ToolDef) (*llm.StreamReader, error)
 	})
 
+	// Proactive Search: 在 LLM 回复前检测是否需要主动搜索
+	// 防止 LLM "先否认再纠正" 的流式输出问题
+	proactiveResult := detectProactiveSearch(userMessage, a.toolDefs)
+	if proactiveResult.ShouldSearch {
+		a.traceLog("proactive_search", map[string]any{
+			"entity": proactiveResult.Entity,
+			"reason": proactiveResult.Reason,
+		})
+		onEvent(StreamEvent{Type: EventStatus, Status: "searching_entity"})
+		proactiveMsg := buildProactiveSearchMessage(proactiveResult.Entity)
+		history = append(history, proactiveMsg)
+	}
+
 	for i := 0; i < maxIterations; i++ {
 		// 发射迭代事件
 		onEvent(StreamEvent{
@@ -237,35 +250,24 @@ func (a *LoopAgent) ChatStreamV2(ctx context.Context, userMessage string, histor
 				}
 			}
 
-			// P0: 数值幻觉检测
-			if i == 0 && hasCalcToolDef(a.toolDefs) {
-				numCheck := detectNumericRisk(userMessage, finalContent, history)
-				if numCheck.HasRisk {
-					a.traceLog("numeric_risk_detected", map[string]any{"numbers": numCheck.RiskNumbers, "retry": true})
+			// Fabrication Guard: 统一检测数值编造 + URL 编造 + 引用编造
+			fabCheck := DetectFabrication(userMessage, finalContent, history, a.toolDefs)
+			if fabCheck.HasFabrication() {
+				a.traceLog("fabrication_detected", map[string]any{
+					"numeric_risk":      fabCheck.NumericRisk,
+					"fabricated_urls":   fabCheck.FabricatedURLs,
+					"unverified_quotes": fabCheck.SuspiciousQuotes,
+					"unverified_books":  fabCheck.SuspiciousBooks,
+				})
+				if i == 0 && fabCheck.NeedsRegeneration() {
 					onEvent(StreamEvent{Type: EventStatus, Status: "recalculating_with_tool"})
-					// 流式路径：保留当前回复在 history 中，追加计算提醒
 					history = append(history, llm.Message{Role: "assistant", Content: finalContent})
 					nudge := buildCalcNudge(userMessage)
 					history = append(history, nudge)
 					continue
 				}
-			}
-
-			// P0: 虚构链接检测
-			if fabricated := detectFabricatedURLs(finalContent, history); len(fabricated) > 0 {
-				a.traceLog("fabricated_urls_detected", map[string]any{"count": len(fabricated), "urls": fabricated})
-				finalContent = cleanFabricatedURLs(finalContent, fabricated)
-			}
-
-			// P0: 引用幻觉检测
-			{
-				citationCheck := detectUnverifiedCitations(finalContent, history)
-				if citationCheck.HasUnverifiedQuotes || citationCheck.HasUnverifiedBooks {
-					a.traceLog("unverified_citations_detected", map[string]any{
-						"quotes": citationCheck.SuspiciousQuotes,
-						"books":  citationCheck.SuspiciousBooks,
-					})
-					finalContent = cleanUnverifiedCitations(finalContent, citationCheck)
+				if fabCheck.NeedsContentFix() {
+					finalContent = FixFabricatedContent(finalContent, fabCheck)
 				}
 			}
 

@@ -220,6 +220,18 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 
 	// 上下文窗口管理已移入循环内（每次 LLM 调用前 PreCheck + 工具调用后 PostCheck）
 
+	// Proactive Search: 在 LLM 回复前检测是否需要主动搜索
+	// 防止 LLM "先否认再纠正" 的问题（如用户问 MacBook NEO，LLM 先说不存在再搜索纠正）
+	proactiveResult := detectProactiveSearch(userMessage, a.toolDefs)
+	if proactiveResult.ShouldSearch {
+		a.traceLog("proactive_search", map[string]any{
+			"entity": proactiveResult.Entity,
+			"reason": proactiveResult.Reason,
+		})
+		proactiveMsg := buildProactiveSearchMessage(proactiveResult.Entity)
+		history = append(history, proactiveMsg)
+	}
+
 	for i := 0; i < maxIterations; i++ {
 		// LLM 调用前预检：确保 history 在窗口内（用户消息可能很长）
 		history = a.fitContextWindowWithCtx(ctx, history)
@@ -293,34 +305,25 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 				}
 			}
 
-			// P0: 数值幻觉检测 — 如果需要计算但未使用 calc 工具，强制重新回答
-			if i == 0 && hasCalcToolDef(a.toolDefs) {
-				numCheck := detectNumericRisk(userMessage, finalContent, history)
-				if numCheck.HasRisk {
-					a.traceLog("numeric_risk_detected", map[string]any{"numbers": numCheck.RiskNumbers, "retry": true})
-					history = history[:len(history)-1] // 移除未经计算器验证的回复
+			// Fabrication Guard: 统一检测数值编造 + URL 编造 + 引用编造
+			fabCheck := DetectFabrication(userMessage, finalContent, history, a.toolDefs)
+			if fabCheck.HasFabrication() {
+				a.traceLog("fabrication_detected", map[string]any{
+					"numeric_risk":    fabCheck.NumericRisk,
+					"fabricated_urls": fabCheck.FabricatedURLs,
+					"unverified_quotes": fabCheck.SuspiciousQuotes,
+					"unverified_books":  fabCheck.SuspiciousBooks,
+				})
+				// 数值编造需要打回重新生成（带 calc 工具）
+				if i == 0 && fabCheck.NeedsRegeneration() {
+					history = history[:len(history)-1]
 					nudge := buildCalcNudge(userMessage)
 					history = append(history, nudge)
 					continue
 				}
-			}
-
-			// P0: 虚构链接检测 — 移除回复中未在工具结果中出现过的 URL
-			if fabricated := detectFabricatedURLs(finalContent, history); len(fabricated) > 0 {
-				a.traceLog("fabricated_urls_detected", map[string]any{"count": len(fabricated), "urls": fabricated})
-				finalContent = cleanFabricatedURLs(finalContent, fabricated)
-				history[len(history)-1] = llm.Message{Role: "assistant", Content: finalContent}
-			}
-
-			// P0: 引用幻觉检测 — 未经验证的名人名言/书籍引用添加免责声明
-			{
-				citationCheck := detectUnverifiedCitations(finalContent, history)
-				if citationCheck.HasUnverifiedQuotes || citationCheck.HasUnverifiedBooks {
-					a.traceLog("unverified_citations_detected", map[string]any{
-						"quotes": citationCheck.SuspiciousQuotes,
-						"books":  citationCheck.SuspiciousBooks,
-					})
-					finalContent = cleanUnverifiedCitations(finalContent, citationCheck)
+				// URL/引用编造直接修正内容
+				if fabCheck.NeedsContentFix() {
+					finalContent = FixFabricatedContent(finalContent, fabCheck)
 					history[len(history)-1] = llm.Message{Role: "assistant", Content: finalContent}
 				}
 			}
