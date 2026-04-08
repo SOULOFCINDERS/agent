@@ -42,6 +42,10 @@ var KnownModels = map[string]ModelProfile{
 	"qwen2.5:14b":       {Name: "qwen2.5:14b", MaxContextTokens: 32768, MaxOutputTokens: 8192, ReserveRatio: 0.2},
 	"qwen2.5:32b":       {Name: "qwen2.5:32b", MaxContextTokens: 32768, MaxOutputTokens: 8192, ReserveRatio: 0.2},
 	"qwen2.5:72b":       {Name: "qwen2.5:72b", MaxContextTokens: 131072, MaxOutputTokens: 8192, ReserveRatio: 0.1},
+	"qwen-turbo":        {Name: "qwen-turbo", MaxContextTokens: 131072, MaxOutputTokens: 8192, ReserveRatio: 0.1},
+	"qwen-plus":         {Name: "qwen-plus", MaxContextTokens: 131072, MaxOutputTokens: 8192, ReserveRatio: 0.1},
+	"qwen-max":          {Name: "qwen-max", MaxContextTokens: 32768, MaxOutputTokens: 8192, ReserveRatio: 0.2},
+	"qwen-long":         {Name: "qwen-long", MaxContextTokens: 1000000, MaxOutputTokens: 8192, ReserveRatio: 0.05},
 }
 
 // DefaultProfile 用于未知模型的默认配置

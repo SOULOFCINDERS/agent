@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -24,9 +25,9 @@ type Server struct {
 	addr         string
 	traceWriter  io.Writer
 
-	// 会话管理（简单实现：每个 session_id 对应一个消息历史）
+	// 会话管理
 	mu       sync.Mutex
-	sessions map[string][]llm.Message
+	sessions map[string]*sessionData
 }
 
 // ServerConfig 服务器配置
@@ -38,6 +39,15 @@ type ServerConfig struct {
 	TraceWriter  io.Writer
 	SystemPrompt string
 	UsageTracker *llm.UsageTracker
+}
+
+
+// sessionData 会话数据
+type sessionData struct {
+	History   []llm.Message
+	Title     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 func NewServer(cfg ServerConfig) *Server {
@@ -69,7 +79,7 @@ func NewServer(cfg ServerConfig) *Server {
 		memStore:    cfg.MemStore,
 		addr:        cfg.Addr,
 		traceWriter: cfg.TraceWriter,
-		sessions:    make(map[string][]llm.Message),
+		sessions:    make(map[string]*sessionData),
 	}
 }
 
@@ -88,6 +98,9 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/api/sessions/clear", s.handleClearSession)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/context", s.handleContext)
+	mux.HandleFunc("/api/sessions", s.handleListSessions)
+	mux.HandleFunc("/api/sessions/rename", s.handleRenameSession)
+	mux.HandleFunc("/api/sessions/delete", s.handleDeleteSession)
 
 	log.Printf("🌐 Agent Web UI starting at http://localhost%s", s.addr)
 	return http.ListenAndServe(s.addr, withCORS(mux))
@@ -252,6 +265,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	reply, newHistory, err := s.loopAgent.ChatStreamV2(ctx, req.Message, history, onEvent)
 	if err != nil {
+		log.Printf("[ChatStream] error: %v", err)
 		sendSSE(w, flusher, "error", err.Error())
 		return
 	}
@@ -279,7 +293,11 @@ func (s *Server) handleClearSession(w http.ResponseWriter, r *http.Request) {
 
 	if req.SessionID != "" {
 		s.mu.Lock()
-		delete(s.sessions, req.SessionID)
+		// 清空历史但保留会话记录
+		if sd, ok := s.sessions[req.SessionID]; ok {
+			sd.History = nil
+			sd.UpdatedAt = time.Now()
+		}
 		s.mu.Unlock()
 	}
 
@@ -288,7 +306,12 @@ func (s *Server) handleClearSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	sessionCount := len(s.sessions)
+	sessionCount := 0
+	for _, sd := range s.sessions {
+		if len(sd.History) > 0 {
+			sessionCount++
+		}
+	}
 	s.mu.Unlock()
 
 	memCount := 0
@@ -356,16 +379,124 @@ func (s *Server) buildContextInfo(sessionID string) contextInfo {
 func (s *Server) getSession(id string) []llm.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	h := s.sessions[id]
-	cp := make([]llm.Message, len(h))
-	copy(cp, h)
+	sd := s.sessions[id]
+	if sd == nil {
+		return nil
+	}
+	cp := make([]llm.Message, len(sd.History))
+	copy(cp, sd.History)
 	return cp
 }
 
 func (s *Server) setSession(id string, history []llm.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sessions[id] = history
+	sd := s.sessions[id]
+	if sd == nil {
+		sd = &sessionData{
+			CreatedAt: time.Now(),
+		}
+		s.sessions[id] = sd
+	}
+	sd.History = history
+	sd.UpdatedAt = time.Now()
+	// 自动生成标题：取第一条用户消息前30字
+	if sd.Title == "" {
+		for _, msg := range history {
+			if msg.Role == "user" && msg.Content != "" {
+				title := msg.Content
+				runes := []rune(title)
+				if len(runes) > 30 {
+					title = string(runes[:30]) + "..."
+				}
+				sd.Title = title
+				break
+			}
+		}
+	}
+}
+
+
+// handleListSessions 返回所有会话列表
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	type sessionItem struct {
+		ID        string `json:"id"`
+		Title     string `json:"title"`
+		MsgCount  int    `json:"msg_count"`
+		CreatedAt int64  `json:"created_at"`
+		UpdatedAt int64  `json:"updated_at"`
+	}
+	var items []sessionItem
+	for id, sd := range s.sessions {
+		if len(sd.History) == 0 {
+			continue
+		}
+		userMsgCount := 0
+		for _, m := range sd.History {
+			if m.Role == "user" {
+				userMsgCount++
+			}
+		}
+		title := sd.Title
+		if title == "" {
+			title = "新对话"
+		}
+		items = append(items, sessionItem{
+			ID:        id,
+			Title:     title,
+			MsgCount:  userMsgCount,
+			CreatedAt: sd.CreatedAt.Unix(),
+			UpdatedAt: sd.UpdatedAt.Unix(),
+		})
+	}
+	s.mu.Unlock()
+
+	// 按更新时间倒序
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].UpdatedAt > items[j].UpdatedAt
+	})
+
+	writeJSON(w, 200, items)
+}
+
+// handleRenameSession 重命名会话
+func (s *Server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var req struct {
+		SessionID string `json:"session_id"`
+		Title     string `json:"title"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	if sd, ok := s.sessions[req.SessionID]; ok {
+		sd.Title = req.Title
+	}
+	s.mu.Unlock()
+
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// handleDeleteSession 删除会话
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	delete(s.sessions, req.SessionID)
+	s.mu.Unlock()
+
+	writeJSON(w, 200, map[string]string{"status": "deleted"})
 }
 
 // ---------- 工具函数 ----------

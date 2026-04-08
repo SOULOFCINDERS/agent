@@ -20,6 +20,7 @@ import (
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 	"github.com/SOULOFCINDERS/agent/internal/planner"
 	"github.com/SOULOFCINDERS/agent/internal/tools"
+	"github.com/SOULOFCINDERS/agent/internal/envfile"
 )
 
 // 包级 RAG 加载选项（由 parseCommonFlags 设置）
@@ -32,6 +33,9 @@ func main() {
 }
 
 func realMain() int {
+	// 加载本地 .env 配置文件（不覆盖已有环境变量）
+	_ = envfile.Load(".env")
+
 	if len(os.Args) < 2 {
 		printUsage()
 		return 2

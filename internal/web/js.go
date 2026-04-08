@@ -36,6 +36,166 @@ func buildAppJS() string {
     });
     messageInput.addEventListener('input', autoResize);
 
+    // ---- 侧边栏与历史对话 ----
+    var sidebar = document.getElementById('sidebar');
+    var sidebarToggle = document.getElementById('sidebarToggle');
+    var sidebarClose = document.getElementById('sidebarClose');
+    var newChatBtn = document.getElementById('newChatBtn');
+    var sessionListEl = document.getElementById('sessionList');
+
+    // 从 localStorage 读取侧边栏状态
+    var sidebarState = localStorage.getItem('sidebar_state');
+    if (sidebarState === 'collapsed') {
+        sidebar.classList.add('collapsed');
+    }
+
+    sidebarToggle.addEventListener('click', function() {
+        sidebar.classList.toggle('collapsed');
+        localStorage.setItem('sidebar_state', sidebar.classList.contains('collapsed') ? 'collapsed' : 'expanded');
+    });
+    sidebarClose.addEventListener('click', function() {
+        sidebar.classList.add('collapsed');
+        localStorage.setItem('sidebar_state', 'collapsed');
+    });
+    newChatBtn.addEventListener('click', function() {
+        startNewChat();
+    });
+
+    function startNewChat() {
+        sessionId = '';
+        activeToolCards = {};
+        chatContainer.innerHTML =
+            '<div class="welcome-msg">' +
+            '<div class="welcome-icon">&#x1f916;</div>' +
+            '<h2>Agent Chat</h2>' +
+            '<p>Ready to assist!</p>' +
+            '<div class="quick-actions">' +
+            '<button class="quick-btn" onclick="sendQuick(\x27列出当前目录\x27)">&#x1f4c2; 列出目录</button>' +
+            '<button class="quick-btn" onclick="sendQuick(\x27计算 (123+456)*789\x27)">&#x1f9ee; 计算</button>' +
+            '</div></div>';
+        updateContextInfo({
+            max_input_tokens: 0, estimated_tokens: 0, usage_percent: 0,
+            remaining_tokens: 0, message_count: 0, has_room: true,
+            total_tokens: 0, prompt_tokens: 0, completion_tokens: 0,
+            call_count: 0, budget: 0, budget_remaining: 0
+        });
+        refreshSessionList();
+        messageInput.focus();
+    }
+
+    function refreshSessionList() {
+        fetch('/api/sessions').then(function(r) { return r.json(); }).then(function(sessions) {
+            if (!sessions || sessions.length === 0) {
+                sessionListEl.innerHTML = '<div class="session-empty">暂无历史对话</div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < sessions.length; i++) {
+                var s = sessions[i];
+                var isActive = s.id === sessionId;
+                var timeStr = formatTimeAgo(s.updated_at);
+                html += '<div class="session-item' + (isActive ? ' active' : '') + '" data-sid="' + escapeHtml(s.id) + '">' +
+                    '<div class="session-item-content">' +
+                    '<div class="session-item-title">' + escapeHtml(s.title) + '</div>' +
+                    '<div class="session-item-meta"><span>' + s.msg_count + ' 条消息</span><span>' + timeStr + '</span></div>' +
+                    '</div>' +
+                    '<div class="session-item-actions">' +
+                    '<button class="session-action-btn rename" title="重命名" data-sid="' + escapeHtml(s.id) + '">&#x270f;&#xfe0f;</button>' +
+                    '<button class="session-action-btn delete" title="删除" data-sid="' + escapeHtml(s.id) + '">&#x1f5d1;&#xfe0f;</button>' +
+                    '</div></div>';
+            }
+            sessionListEl.innerHTML = html;
+
+            var items = sessionListEl.querySelectorAll('.session-item');
+            for (var j = 0; j < items.length; j++) {
+                (function(item) {
+                    item.addEventListener('click', function(e) {
+                        if (e.target.closest('.session-action-btn')) return;
+                        var sid = item.getAttribute('data-sid');
+                        switchToSession(sid);
+                    });
+                })(items[j]);
+            }
+
+            var renameBtns = sessionListEl.querySelectorAll('.session-action-btn.rename');
+            for (var k = 0; k < renameBtns.length; k++) {
+                (function(btn) {
+                    btn.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        var sid = btn.getAttribute('data-sid');
+                        var newTitle = prompt('输入新标题:');
+                        if (newTitle && newTitle.trim()) {
+                            fetch('/api/sessions/rename', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ session_id: sid, title: newTitle.trim() })
+                            }).then(function() { refreshSessionList(); });
+                        }
+                    });
+                })(renameBtns[k]);
+            }
+
+            var delBtns = sessionListEl.querySelectorAll('.session-action-btn.delete');
+            for (var m = 0; m < delBtns.length; m++) {
+                (function(btn) {
+                    btn.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        var sid = btn.getAttribute('data-sid');
+                        if (confirm('确定删除这个对话？')) {
+                            fetch('/api/sessions/delete', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ session_id: sid })
+                            }).then(function() {
+                                if (sid === sessionId) {
+                                    startNewChat();
+                                } else {
+                                    refreshSessionList();
+                                }
+                            });
+                        }
+                    });
+                })(delBtns[m]);
+            }
+        }).catch(function(e) {
+            sessionListEl.innerHTML = '<div class="session-empty">加载失败</div>';
+        });
+    }
+
+    function switchToSession(sid) {
+        if (sid === sessionId) return;
+        if (isStreaming) return;
+        sessionId = sid;
+        chatContainer.innerHTML = '<div class="message agent"><div class="msg-avatar">&#x1f916;</div><div class="msg-content"><div class="thinking"><div class="thinking-dots"><span></span><span></span><span></span></div> 加载对话...</div></div></div>';
+        refreshSessionList();
+
+        fetch('/api/context?session_id=' + encodeURIComponent(sid))
+            .then(function(r) { return r.json(); })
+            .then(function(data) { updateContextInfo(data); })
+            .catch(function() {});
+
+        setTimeout(function() {
+            chatContainer.innerHTML = '';
+            appendMessage('agent', '已切换到此对话。继续输入消息来继续对话。');
+        }, 300);
+    }
+
+    function formatTimeAgo(ts) {
+        if (!ts) return '';
+        var now = Math.floor(Date.now() / 1000);
+        var diff = now - ts;
+        if (diff < 60) return '刚刚';
+        if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+        if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前';
+        if (diff < 604800) return Math.floor(diff / 86400) + ' 天前';
+        var d = new Date(ts * 1000);
+        return (d.getMonth() + 1) + '/' + d.getDate();
+    }
+
+    // 初始加载会话列表
+    refreshSessionList();
+
+
     function autoResize() {
         messageInput.style.height = 'auto';
         messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
@@ -249,7 +409,7 @@ func buildAppJS() string {
             if (chunk.done) break;
 
             buffer += decoder.decode(chunk.value, { stream: true });
-            var sseLines = buffer.split('\\n');
+            var sseLines = buffer.split('\n');
             buffer = sseLines.pop() || '';
 
             var eventType = '';
@@ -259,26 +419,26 @@ func buildAppJS() string {
                 var line = sseLines[i];
                 if (line.indexOf('event: ') === 0) {
                     if (eventType && dataLines.length > 0) {
-                        handleEvent(eventType, dataLines.join('\\n'));
+                        handleEvent(eventType, dataLines.join('\n'));
                         dataLines = [];
                     }
                     eventType = line.slice(7);
                 } else if (line.indexOf('data: ') === 0) {
                     dataLines.push(line.slice(6));
                 } else if (line === '' && eventType) {
-                    handleEvent(eventType, dataLines.join('\\n'));
+                    handleEvent(eventType, dataLines.join('\n'));
                     eventType = '';
                     dataLines = [];
                 }
             }
             if (eventType && dataLines.length > 0) {
-                handleEvent(eventType, dataLines.join('\\n'));
+                handleEvent(eventType, dataLines.join('\n'));
             }
         }
 
         // 处理流结束后 buffer 中的残余数据
         if (buffer.trim()) {
-            var remainLines = buffer.split('\\n');
+            var remainLines = buffer.split('\n');
             var lastEvent = '';
             var lastData = [];
             for (var j = 0; j < remainLines.length; j++) {
@@ -290,7 +450,7 @@ func buildAppJS() string {
                 }
             }
             if (lastEvent && lastData.length > 0) {
-                handleEvent(lastEvent, lastData.join('\\n'));
+                handleEvent(lastEvent, lastData.join('\n'));
             }
         }
 
@@ -378,12 +538,18 @@ func buildAppJS() string {
                 } catch (e) {}
             } else if (event === 'done') {
                 if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
-                if (!agentEl && data) agentEl = appendMessage('agent', data);
+                if (!agentEl && data) {
+                    agentEl = appendMessage('agent', data);
+                } else if (agentEl && !agentContent && data) {
+                    updateMessageContent(agentEl, data);
+                }
                 // 重置工具状态
                 activeToolCards = {};
                 agentEl = null;
                 agentContent = '';
                 toolsContainer = null;
+                // 更新侧边栏会话列表
+                refreshSessionList();
             } else if (event === 'error') {
                 if (thinkingEl && thinkingEl.parentNode) thinkingEl.remove();
                 appendMessage('agent', 'Error: ' + data);
@@ -483,6 +649,8 @@ func buildAppJS() string {
             total_tokens: 0, prompt_tokens: 0, completion_tokens: 0,
             call_count: 0, budget: 0, budget_remaining: 0
         });
+        sessionId = '';
+        refreshSessionList();
     }
 })();`
 }

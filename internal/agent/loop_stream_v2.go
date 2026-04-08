@@ -141,6 +141,13 @@ func (a *LoopAgent) ChatStreamV2(ctx context.Context, userMessage string, histor
 
 			if firstDelta.Done {
 				sr.Close()
+				if firstDelta.Usage != nil && a.usageTracker != nil {
+					a.usageTracker.Record(llm.Usage{
+						PromptTokens:     firstDelta.Usage.PromptTokens,
+						CompletionTokens: firstDelta.Usage.CompletionTokens,
+						TotalTokens:      firstDelta.Usage.TotalTokens,
+					})
+				}
 				msg := llm.Message{Role: "assistant", Content: fullContent}
 				history = append(history, msg)
 				a.traceLog("final_answer_stream", map[string]any{"content_len": len(fullContent)})
@@ -178,7 +185,22 @@ func (a *LoopAgent) ChatStreamV2(ctx context.Context, userMessage string, histor
 				}
 
 				if delta.Done {
+					if delta.Usage != nil && a.usageTracker != nil {
+						a.usageTracker.Record(llm.Usage{
+							PromptTokens:     delta.Usage.PromptTokens,
+							CompletionTokens: delta.Usage.CompletionTokens,
+							TotalTokens:      delta.Usage.TotalTokens,
+						})
+					}
 					break
+				}
+				// 流式最后一个 chunk 可能包含 usage
+				if delta.Usage != nil && a.usageTracker != nil {
+					a.usageTracker.Record(llm.Usage{
+						PromptTokens:     delta.Usage.PromptTokens,
+						CompletionTokens: delta.Usage.CompletionTokens,
+						TotalTokens:      delta.Usage.TotalTokens,
+					})
 				}
 			}
 			sr.Close()
