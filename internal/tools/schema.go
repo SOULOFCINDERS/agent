@@ -25,7 +25,7 @@ func BuiltinSchemas() map[string]struct {
 			}`),
 		},
 		"calc": {
-			Desc: "计算四则运算表达式，支持加减乘除和括号",
+			Desc: "计算四则运算表达式，支持加减乘除和括号。【重要】任何涉及数字计算的问题（利息、面积、价格合计、百分比等），都必须使用此工具获取精确结果，不要心算或估算。你的心算容易出错。",
 			Schema: json.RawMessage(`{
 				"type": "object",
 				"properties": {

@@ -82,6 +82,8 @@ func NeedsVerification(userMessage string, reply string, history []llm.Message) 
 		"根据", "据", "官方", "官网", "数据显示",
 		"released", "features", "supports", "according to",
 		"价格", "版本", "更新", "上市",
+		"建议", "应该", "推荐", "最好", "不如", "适合",
+		"suggest", "recommend", "should", "better",
 	}
 	replyLower := strings.ToLower(reply)
 	for _, ind := range factIndicators {
@@ -107,6 +109,8 @@ func buildVerificationPrompt(userMessage string, reply string, toolResults []too
 3. **URL 真实性**：回复中的所有链接是否都来自工具返回的结果？
 4. **逻辑一致性**：回复的各部分之间是否自相矛盾？
 5. **过度确定**：对于工具结果中不确定或模糊的信息，回复是否错误地表述为确定事实？
+6. **常识推理**：回复是否忽略了问题中的隐含前提或常识约束？例如：用户问"去洗车店是走路还是开车"，正确推理必须考虑"洗车需要带车过去"这个隐含前提。
+7. **目的-手段一致性**：建议的行为方式是否与用户的行为目的相矛盾？
 
 ## 输出格式（严格 JSON）
 
@@ -115,7 +119,7 @@ func buildVerificationPrompt(userMessage string, reply string, toolResults []too
   "passed": true/false,
   "issues": [
     {
-      "type": "factual_error|unsupported_claim|fabricated_url|hallucination|inconsistency",
+      "type": "factual_error|unsupported_claim|fabricated_url|hallucination|inconsistency|reasoning_error",
       "claim": "回复中有问题的原文片段",
       "reason": "为什么这是有问题的"
     }
