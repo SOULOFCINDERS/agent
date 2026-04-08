@@ -88,7 +88,7 @@ func BuiltinSchemas() map[string]struct {
 			}`),
 		},
 		"web_search": {
-			Desc: "联网搜索，根据关键词搜索互联网内容。当用户询问最新信息、新闻、实时数据、或你不确定的事实时使用此工具",
+			Desc: "联网搜索互联网上的最新信息。【重要】当用户提到任何具体产品名称、型号、事件、人物时，必须先调用此工具搜索验证，不要依赖内部知识直接回答。你的训练数据可能已过时，搜索结果比内部知识更可靠。",
 			Schema: json.RawMessage(`{
 				"type": "object",
 				"properties": {

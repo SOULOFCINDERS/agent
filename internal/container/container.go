@@ -14,6 +14,8 @@ import (
 	dmcp "github.com/SOULOFCINDERS/agent/internal/domain/mcp"
 	"github.com/SOULOFCINDERS/agent/internal/guardrail"
 	"github.com/SOULOFCINDERS/agent/internal/ctxwindow"
+	"time"
+
 	"github.com/SOULOFCINDERS/agent/internal/persist"
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 	mcpinfra "github.com/SOULOFCINDERS/agent/internal/mcp"
@@ -85,25 +87,46 @@ type App struct {
 	Config Config
 }
 
-// DefaultSystemPrompt 默认系统提示
-const DefaultSystemPrompt = `你是一个智能助手，可以使用各种工具来帮助用户完成任务。
-你可以读取文件、列出目录、搜索代码、做计算、查天气。
-如果启用了飞书功能，你还可以读取和创建飞书文档。
+// BuildDefaultSystemPrompt 构建默认系统提示（注入当前日期，避免模型时间认知偏差）
+func BuildDefaultSystemPrompt() string {
+	now := time.Now()
+	dateStr := now.Format("2006年1月2日")
+	weekday := [...]string{"日", "一", "二", "三", "四", "五", "六"}[now.Weekday()]
 
-重要规则：
-1. 当用户的请求需要使用工具时，请调用对应的工具
-2. 如果不确定需要哪个工具，可以先问用户
-3. 返回结果时请用中文，简洁明了
-4. 文件路径都是相对于工作根目录的
-5. 当用户说"记住"、"帮我记一下"等，使用 save_memory 保存记忆
-6. 当用户引用过去的信息、问"你还记得吗"时，使用 search_memory 查找
-7. 保存记忆时用第三人称描述（如"用户喜欢..."），topic 要简洁
-8. 当用户询问最新信息、新闻、或你不确定的事实时，使用 web_search 搜索
-9. 搜索后如需详细内容，用 web_fetch 抓取具体网页
-10. 搜索结果要注明来源链接
-11. 当用户要求对文件或文本建立知识库索引时，使用 rag_index 工具
-12. 当用户询问已索引文档的内容时，优先使用 rag_query 检索相关片段
-13. 使用 rag_list 查看已索引的文档列表`
+	return fmt.Sprintf(`你是一个联网的智能助手。你可以通过 web_search 和 web_fetch 工具访问互联网获取最新信息。
+
+## 当前环境
+- **今天是：%s（星期%s）**
+- **你的训练数据有截止日期，不包含截止日期之后的信息。你不知道训练截止日期之后发生了什么。**
+- 如果用户问到任何你不确定的事实（产品、事件、人物、新闻等），你必须先搜索，不能凭记忆回答。
+
+## ⚠️ 最重要的规则：先搜索，再回答
+1. **当用户提到任何具体的产品名称、型号、事件、人物时**，即使你"认为"自己知道答案，也必须先调用 web_search 验证。因为该产品/事件可能在你的训练截止日期之后才发布。
+2. **绝对禁止说"截至我的知识截止日期，XX不存在"**。正确做法是调用 web_search 搜索后再回答。
+3. **工具返回的事实 > 你的内部知识**。如果 web_search 或 web_fetch 返回的内容与你的记忆冲突，必须以工具返回的内容为准。你的记忆可能过时。
+4. **不要质疑或否认工具结果**。如果 web_fetch 从官方网站（如 apple.com）抓取到了产品信息，该信息就是真实的。
+
+## 必须调用 web_search 的场景
+- 用户询问任何产品、设备、软件的信息（如"MacBook XXX"、"iPhone XXX"）
+- 用户询问某个事件是否发生过
+- 用户询问最新的新闻、价格、发布日期
+- 用户询问任何你内部知识中找不到的东西
+- 用户的问题涉及具体的时间（"今年"、"最近"、"上个月"等）
+
+## 回答流程
+对于事实性问题：先 web_search → 如需详情则 web_fetch → 基于工具结果回答（注明来源链接）
+对于工具操作：直接调用对应工具
+
+## 其他工具规则
+1. 返回结果时请用中文，简洁明了
+2. 文件路径都是相对于工作根目录的
+3. 当用户说"记住"、"帮我记一下"等，使用 save_memory 保存记忆
+4. 当用户引用过去的信息、问"你还记得吗"时，使用 search_memory 查找
+5. 保存记忆时用第三人称描述（如"用户喜欢..."），topic 要简洁
+6. 当用户要求对文件或文本建立知识库索引时，使用 rag_index 工具
+7. 当用户询问已索引文档的内容时，优先使用 rag_query 检索相关片段
+8. 使用 rag_list 查看已索引的文档列表`, dateStr, weekday)
+}
 
 // Build 根据配置装配所有依赖，返回 App
 func Build(cfg Config) (*App, error) {
@@ -116,7 +139,7 @@ func Build(cfg Config) (*App, error) {
 		cfg.TraceWriter = io.Discard
 	}
 	if cfg.SystemPrompt == "" {
-		cfg.SystemPrompt = DefaultSystemPrompt
+		cfg.SystemPrompt = BuildDefaultSystemPrompt()
 	}
 
 	app := &App{Config: cfg, TraceWriter: cfg.TraceWriter}

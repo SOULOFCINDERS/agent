@@ -206,6 +206,21 @@ func (a *LoopAgent) ChatStreamV2(ctx context.Context, userMessage string, histor
 			sr.Close()
 
 			finalContent := fullContent
+
+			// 知识盲区检测：如果 LLM 用"训练截止"否定事实，且有搜索工具，自动触发搜索
+			if i == 0 && hasWebSearchTool(a.toolDefs) {
+				if gap, pattern := detectKnowledgeGap(finalContent); gap {
+					a.traceLog("knowledge_gap_detected", map[string]any{"pattern": pattern, "retry": true})
+					// 注入搜索提醒，让 LLM 重新回答（流式输出已经发了部分内容，追加提示）
+					onEvent(StreamEvent{Type: EventStatus, Status: "searching_for_latest_info"})
+					nudge := buildSearchNudge(userMessage)
+					// 不保留否定性回复，直接注入搜索提醒
+					history = append(history, llm.Message{Role: "assistant", Content: finalContent})
+					history = append(history, nudge)
+					continue
+				}
+			}
+
 			// Guardrail: 输出安全检查
 			if a.guardrails != nil {
 				gr := a.guardrails.Run(ctx, gd.PhaseOutput, finalContent)
@@ -240,6 +255,16 @@ func (a *LoopAgent) ChatStreamV2(ctx context.Context, userMessage string, histor
 			history = append(history, resp.Message)
 
 			if len(resp.Message.ToolCalls) == 0 {
+				// 知识盲区检测（非流式降级模式）
+				if i == 0 && hasWebSearchTool(a.toolDefs) {
+					if gap, pattern := detectKnowledgeGap(resp.Message.Content); gap {
+						a.traceLog("knowledge_gap_detected", map[string]any{"pattern": pattern, "retry": true})
+						onEvent(StreamEvent{Type: EventStatus, Status: "searching_for_latest_info"})
+						nudge := buildSearchNudge(userMessage)
+						history = append(history, nudge)
+						continue
+					}
+				}
 				onEvent(StreamEvent{Type: EventDelta, Content: resp.Message.Content})
 				a.traceLog("final_answer", map[string]any{"content_len": len(resp.Message.Content)})
 				return resp.Message.Content, history, nil

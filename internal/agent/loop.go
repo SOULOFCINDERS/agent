@@ -264,6 +264,19 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 		// 如果没有工具调用，返回最终文本
 		if len(resp.Message.ToolCalls) == 0 {
 			finalContent := resp.Message.Content
+
+			// 知识盲区检测：如果 LLM 用"训练截止"否定事实，且有搜索工具，自动触发搜索
+			if i == 0 && hasWebSearchTool(a.toolDefs) {
+				if gap, pattern := detectKnowledgeGap(finalContent); gap {
+					a.traceLog("knowledge_gap_detected", map[string]any{"pattern": pattern, "retry": true})
+					// 移除这条否定性回复，注入搜索提醒，让 LLM 重新回答
+					history = history[:len(history)-1] // 移除 assistant 否定回复
+					nudge := buildSearchNudge(userMessage)
+					history = append(history, nudge)
+					continue // 回到循环顶部，LLM 会看到搜索提醒
+				}
+			}
+
 			// Guardrail: 输出安全检查
 			if a.guardrails != nil {
 				gr := a.guardrails.Run(ctx, gd.PhaseOutput, finalContent)
