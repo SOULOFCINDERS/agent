@@ -169,15 +169,31 @@ func buildAppJS() string {
         chatContainer.innerHTML = '<div class="message agent"><div class="msg-avatar">&#x1f916;</div><div class="msg-content"><div class="thinking"><div class="thinking-dots"><span></span><span></span><span></span></div> 加载对话...</div></div></div>';
         refreshSessionList();
 
+        // 并行加载：上下文信息 + 历史消息
         fetch('/api/context?session_id=' + encodeURIComponent(sid))
             .then(function(r) { return r.json(); })
             .then(function(data) { updateContextInfo(data); })
             .catch(function() {});
 
-        setTimeout(function() {
-            chatContainer.innerHTML = '';
-            appendMessage('agent', '已切换到此对话。继续输入消息来继续对话。');
-        }, 300);
+        fetch('/api/sessions/history?session_id=' + encodeURIComponent(sid))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                chatContainer.innerHTML = '';
+                if (data.messages && data.messages.length > 0) {
+                    for (var k = 0; k < data.messages.length; k++) {
+                        var msg = data.messages[k];
+                        var role = msg.role === 'user' ? 'user' : 'agent';
+                        appendMessage(role, msg.content);
+                    }
+                } else {
+                    appendMessage('agent', '已切换到此对话。继续输入消息来继续对话。');
+                }
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            })
+            .catch(function() {
+                chatContainer.innerHTML = '';
+                appendMessage('agent', '已切换到此对话。继续输入消息来继续对话。');
+            });
     }
 
     function formatTimeAgo(ts) {

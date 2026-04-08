@@ -97,6 +97,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/api/sessions", s.handleListSessions)
 	mux.HandleFunc("/api/sessions/rename", s.handleRenameSession)
 	mux.HandleFunc("/api/sessions/delete", s.handleDeleteSession)
+	mux.HandleFunc("/api/sessions/history", s.handleSessionHistory)
 
 	log.Printf("🌐 Agent Web UI starting at http://localhost%s", s.addr)
 	return http.ListenAndServe(s.addr, withCORS(mux))
@@ -422,6 +423,45 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, 200, map[string]string{"status": "deleted"})
+}
+
+// handleSessionHistory 返回指定会话的历史消息（仅 user + assistant，用于前端渲染）
+func (s *Server) handleSessionHistory(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		writeJSON(w, 400, map[string]string{"error": "missing session_id"})
+		return
+	}
+
+	history := s.getSession(sessionID)
+	if history == nil {
+		writeJSON(w, 200, map[string]any{"session_id": sessionID, "messages": []struct{}{}})
+		return
+	}
+
+	// 过滤：只返回 user 和 assistant 消息（跳过 system、tool 等内部消息）
+	type historyMsg struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	var msgs []historyMsg
+	for _, m := range history {
+		if m.Role == "user" || m.Role == "assistant" {
+			// 跳过空内容（如 assistant 的纯 tool_call 消息）
+			if m.Content == "" {
+				continue
+			}
+			// 跳过系统注入的搜索提醒等内部消息
+			if m.Role == "user" && len(m.Content) > 0 && m.Content[0] == '[' {
+				if len(m.Content) > 6 && m.Content[:6] == "[系统" {
+					continue
+				}
+			}
+			msgs = append(msgs, historyMsg{Role: m.Role, Content: m.Content})
+		}
+	}
+
+	writeJSON(w, 200, map[string]any{"session_id": sessionID, "messages": msgs})
 }
 
 // ---------- 工具函数 ----------
