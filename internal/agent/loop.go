@@ -278,6 +278,21 @@ func (a *LoopAgent) Chat(ctx context.Context, userMessage string, history []llm.
 				}
 			}
 
+			// 推理一致性检查：如果推理过程和结论矛盾，强制 LLM 重新给出一致结论
+			if i == 0 {
+				rCheck := detectReasoningContradiction(finalContent)
+				if rCheck.HasContradiction {
+					a.traceLog("reasoning_contradiction", map[string]any{
+						"reasoning_claim":  rCheck.ReasoningClaim,
+						"conclusion_claim": rCheck.ConclusionClaim,
+					})
+					history = history[:len(history)-1] // 移除矛盾回复
+					nudge := buildReasoningFixNudge(userMessage, rCheck)
+					history = append(history, nudge)
+					continue
+				}
+			}
+
 			// P0: 数值幻觉检测 — 如果需要计算但未使用 calc 工具，强制重新回答
 			if i == 0 && hasCalcToolDef(a.toolDefs) {
 				numCheck := detectNumericRisk(userMessage, finalContent, history)

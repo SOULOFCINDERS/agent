@@ -221,6 +221,22 @@ func (a *LoopAgent) ChatStreamV2(ctx context.Context, userMessage string, histor
 				}
 			}
 
+			// 推理一致性检查
+			if i == 0 {
+				rCheck := detectReasoningContradiction(finalContent)
+				if rCheck.HasContradiction {
+					a.traceLog("reasoning_contradiction", map[string]any{
+						"reasoning_claim":  rCheck.ReasoningClaim,
+						"conclusion_claim": rCheck.ConclusionClaim,
+					})
+					onEvent(StreamEvent{Type: EventStatus, Status: "fixing_reasoning_contradiction"})
+					history = append(history, llm.Message{Role: "assistant", Content: finalContent})
+					nudge := buildReasoningFixNudge(userMessage, rCheck)
+					history = append(history, nudge)
+					continue
+				}
+			}
+
 			// P0: 数值幻觉检测
 			if i == 0 && hasCalcToolDef(a.toolDefs) {
 				numCheck := detectNumericRisk(userMessage, finalContent, history)
