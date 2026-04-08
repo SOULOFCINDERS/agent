@@ -14,6 +14,7 @@ import (
 	dmcp "github.com/SOULOFCINDERS/agent/internal/domain/mcp"
 	"github.com/SOULOFCINDERS/agent/internal/guardrail"
 	"github.com/SOULOFCINDERS/agent/internal/ctxwindow"
+	"github.com/SOULOFCINDERS/agent/internal/persist"
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 	mcpinfra "github.com/SOULOFCINDERS/agent/internal/mcp"
 	"github.com/SOULOFCINDERS/agent/internal/session"
@@ -71,6 +72,7 @@ type App struct {
 	MemStore       *memory.Store
 	Compressor     *memory.Compressor
 	UsageTracker   *llm.UsageTracker
+	PersistStore   *persist.Store
 	LoopAgent      *agent.LoopAgent
 	Orchestrator   *multiagent.Orchestrator
 	TraceWriter    io.Writer
@@ -189,6 +191,16 @@ func Build(cfg Config) (*App, error) {
 	// 5. Token 用量追踪
 	app.UsageTracker = llm.NewUsageTracker(cfg.Budget)
 
+	// 会话持久化存储
+	persistDir := persist.DefaultDir()
+	pStore, err := persist.NewStore(persistDir)
+	if err != nil {
+		log.Printf("⚠️  会话持久化初始化失败: %v (将使用内存存储)", err)
+	} else {
+		app.PersistStore = pStore
+		log.Printf("💾 会话持久化: %s (%d 条历史会话)", persistDir, pStore.Count())
+	}
+
 	// 6. Guardrails（可选）
 	if cfg.GuardrailMode {
 		app.Guardrails = guardrail.DefaultPipeline(cfg.BlockKeywords, cfg.MaxInputChars)
@@ -271,6 +283,8 @@ func (a *App) BuildWebServer() *web.Server {
 		TraceWriter:  a.TraceWriter,
 		SystemPrompt: a.Config.SystemPrompt,
 		UsageTracker: a.UsageTracker,
+		LoopAgent:    a.LoopAgent, // 传入已配好 ContextManager 的 Agent
+		PersistStore: a.PersistStore,
 	})
 }
 
@@ -303,10 +317,9 @@ func buildRegistry(absRoot string, cfg Config) *tools.Registry {
 	reg.Register(tools.NewSummarizeTool())
 	reg.Register(tools.NewWeatherTool())
 
-	if cfg.SearchMode {
-		reg.Register(tools.NewWebSearchTool())
-		reg.Register(tools.NewWebFetchTool())
-	}
+	// 联网搜索默认启用（web_search + web_fetch）
+	reg.Register(tools.NewWebSearchTool())
+	reg.Register(tools.NewWebFetchTool())
 
 	if cfg.FeishuMode {
 		reg.Register(tools.NewFeishuReadDocTool())

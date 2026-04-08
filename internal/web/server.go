@@ -7,12 +7,11 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/SOULOFCINDERS/agent/internal/agent"
+	"github.com/SOULOFCINDERS/agent/internal/persist"
 	"github.com/SOULOFCINDERS/agent/internal/llm"
 	"github.com/SOULOFCINDERS/agent/internal/memory"
 	"github.com/SOULOFCINDERS/agent/internal/tools"
@@ -25,9 +24,8 @@ type Server struct {
 	addr         string
 	traceWriter  io.Writer
 
-	// 会话管理
-	mu       sync.Mutex
-	sessions map[string]*sessionData
+	// 会话管理（持久化存储）
+	persistStore *persist.Store
 }
 
 // ServerConfig 服务器配置
@@ -39,16 +37,10 @@ type ServerConfig struct {
 	TraceWriter  io.Writer
 	SystemPrompt string
 	UsageTracker *llm.UsageTracker
+	LoopAgent    *agent.LoopAgent // 可选：直接传入已配置好的 LoopAgent
+	PersistStore *persist.Store   // 可选：持久化存储
 }
 
-
-// sessionData 会话数据
-type sessionData struct {
-	History   []llm.Message
-	Title     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
 
 func NewServer(cfg ServerConfig) *Server {
 	if cfg.Addr == "" {
@@ -67,19 +59,23 @@ func NewServer(cfg ServerConfig) *Server {
 		})
 	}
 
-	loopAgent := agent.NewLoopAgent(cfg.LLMClient, cfg.Registry, cfg.SystemPrompt, cfg.TraceWriter, cfg.MemStore, compressor)
-
-	// 设置 Token 用量追踪
-	if cfg.UsageTracker != nil {
-		loopAgent.SetUsageTracker(cfg.UsageTracker)
+	var loopAgent *agent.LoopAgent
+	if cfg.LoopAgent != nil {
+		// 使用外部传入的已配置好的 LoopAgent（带 ContextManager 等）
+		loopAgent = cfg.LoopAgent
+	} else {
+		loopAgent = agent.NewLoopAgent(cfg.LLMClient, cfg.Registry, cfg.SystemPrompt, cfg.TraceWriter, cfg.MemStore, compressor)
+		if cfg.UsageTracker != nil {
+			loopAgent.SetUsageTracker(cfg.UsageTracker)
+		}
 	}
 
 	return &Server{
-		loopAgent:   loopAgent,
-		memStore:    cfg.MemStore,
-		addr:        cfg.Addr,
-		traceWriter: cfg.TraceWriter,
-		sessions:    make(map[string]*sessionData),
+		loopAgent:    loopAgent,
+		memStore:     cfg.MemStore,
+		addr:         cfg.Addr,
+		traceWriter:  cfg.TraceWriter,
+		persistStore: cfg.PersistStore,
 	}
 }
 
@@ -291,28 +287,18 @@ func (s *Server) handleClearSession(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	if req.SessionID != "" {
-		s.mu.Lock()
-		// 清空历史但保留会话记录
-		if sd, ok := s.sessions[req.SessionID]; ok {
-			sd.History = nil
-			sd.UpdatedAt = time.Now()
-		}
-		s.mu.Unlock()
+	if req.SessionID != "" && s.persistStore != nil {
+		_ = s.persistStore.ClearHistory(req.SessionID)
 	}
 
 	writeJSON(w, 200, map[string]string{"status": "cleared"})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
 	sessionCount := 0
-	for _, sd := range s.sessions {
-		if len(sd.History) > 0 {
-			sessionCount++
-		}
+	if s.persistStore != nil {
+		sessionCount = s.persistStore.Count()
 	}
-	s.mu.Unlock()
 
 	memCount := 0
 	if s.memStore != nil {
@@ -377,86 +363,27 @@ func (s *Server) buildContextInfo(sessionID string) contextInfo {
 // ---------- 会话管理 ----------
 
 func (s *Server) getSession(id string) []llm.Message {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sd := s.sessions[id]
-	if sd == nil {
+	if s.persistStore == nil {
 		return nil
 	}
-	cp := make([]llm.Message, len(sd.History))
-	copy(cp, sd.History)
-	return cp
+	return s.persistStore.GetHistory(id)
 }
 
 func (s *Server) setSession(id string, history []llm.Message) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sd := s.sessions[id]
-	if sd == nil {
-		sd = &sessionData{
-			CreatedAt: time.Now(),
-		}
-		s.sessions[id] = sd
+	if s.persistStore == nil {
+		return
 	}
-	sd.History = history
-	sd.UpdatedAt = time.Now()
-	// 自动生成标题：取第一条用户消息前30字
-	if sd.Title == "" {
-		for _, msg := range history {
-			if msg.Role == "user" && msg.Content != "" {
-				title := msg.Content
-				runes := []rune(title)
-				if len(runes) > 30 {
-					title = string(runes[:30]) + "..."
-				}
-				sd.Title = title
-				break
-			}
-		}
-	}
+	_ = s.persistStore.SaveHistory(id, history)
 }
 
 
 // handleListSessions 返回所有会话列表
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	type sessionItem struct {
-		ID        string `json:"id"`
-		Title     string `json:"title"`
-		MsgCount  int    `json:"msg_count"`
-		CreatedAt int64  `json:"created_at"`
-		UpdatedAt int64  `json:"updated_at"`
+	if s.persistStore == nil {
+		writeJSON(w, 200, []struct{}{})
+		return
 	}
-	var items []sessionItem
-	for id, sd := range s.sessions {
-		if len(sd.History) == 0 {
-			continue
-		}
-		userMsgCount := 0
-		for _, m := range sd.History {
-			if m.Role == "user" {
-				userMsgCount++
-			}
-		}
-		title := sd.Title
-		if title == "" {
-			title = "新对话"
-		}
-		items = append(items, sessionItem{
-			ID:        id,
-			Title:     title,
-			MsgCount:  userMsgCount,
-			CreatedAt: sd.CreatedAt.Unix(),
-			UpdatedAt: sd.UpdatedAt.Unix(),
-		})
-	}
-	s.mu.Unlock()
-
-	// 按更新时间倒序
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].UpdatedAt > items[j].UpdatedAt
-	})
-
+	items := s.persistStore.List()
 	writeJSON(w, 200, items)
 }
 
@@ -472,11 +399,9 @@ func (s *Server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	s.mu.Lock()
-	if sd, ok := s.sessions[req.SessionID]; ok {
-		sd.Title = req.Title
+	if s.persistStore != nil {
+		_ = s.persistStore.Rename(req.SessionID, req.Title)
 	}
-	s.mu.Unlock()
 
 	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
@@ -492,9 +417,9 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	s.mu.Lock()
-	delete(s.sessions, req.SessionID)
-	s.mu.Unlock()
+	if s.persistStore != nil {
+		_ = s.persistStore.Delete(req.SessionID)
+	}
 
 	writeJSON(w, 200, map[string]string{"status": "deleted"})
 }
