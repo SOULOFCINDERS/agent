@@ -106,33 +106,13 @@ func FixFabricatedContent(content string, result FabricationCheckResult) string 
 // numericPattern 匹配回复中的数字（含小数、百分比、带逗号的大数字）
 var numericPattern = regexp.MustCompile(`(?:[\d,]+\.?\d+)\s*(?:%|GB|MB|TB|元|美元|万|亿|kg|km|米)?`)
 
-// mathExpressionIndicators 暗示需要计算的关键词
-var mathExpressionIndicators = []string{
-	"计算", "算一下", "帮我算", "算算",
-	"总共多少", "合计", "平均", "总计",
-	"加上", "减去", "乘以", "除以", "百分之",
-	"calculate", "total", "sum", "average",
-	"年利率", "月供", "利息", "复利", "收益率",
-	"面积是多少", "体积是多少",
-}
-
+// checkNumericFabrication 检测回复中的数值编造（后置守卫）
+// 简化策略：不再用关键词做意图路由（已移入 system prompt），
+// 仅做后置检查——如果回复包含计算结果数字但未使用 calc 工具，标记为可疑。
 func checkNumericFabrication(userMessage string, reply string, history []llm.Message) FabricationCheckResult {
 	result := FabricationCheckResult{}
 
-	// 1. 用户消息是否暗示需要计算
-	needsCalc := false
-	msgLower := strings.ToLower(userMessage)
-	for _, ind := range mathExpressionIndicators {
-		if strings.Contains(msgLower, strings.ToLower(ind)) {
-			needsCalc = true
-			break
-		}
-	}
-	if !needsCalc {
-		return result
-	}
-
-	// 2. 检查 history 中是否已使用了 calc 工具
+	// 1. 检查 history 中是否已使用了 calc 工具
 	usedCalc := false
 	for _, msg := range history {
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
@@ -148,35 +128,38 @@ func checkNumericFabrication(userMessage string, reply string, history []llm.Mes
 		}
 	}
 
-	// 3. 如果需要计算但没用 calc，检查回复中是否有具体数字
-	if !usedCalc {
-		numbers := numericPattern.FindAllString(reply, -1)
-		var suspicious []string
-		for _, n := range numbers {
-			numStr := strings.ReplaceAll(n, ",", "")
-			numStr = strings.TrimRight(numStr, "%GB MBTBkgkmm元美万亿米")
-			numStr = strings.TrimSpace(numStr)
-			if numStr == "" {
-				continue
-			}
-			val, err := strconv.ParseFloat(numStr, 64)
-			if err != nil {
-				continue
-			}
-			// 过滤年份（2000-2099）和个位数
-			if val >= 2000 && val <= 2099 {
-				continue
-			}
-			if val < 10 {
-				continue
-			}
-			suspicious = append(suspicious, n)
+	// 如果已使用 calc，无需进一步检查
+	if usedCalc {
+		return result
+	}
+
+	// 2. 检查回复中是否有具体的计算结果数字
+	numbers := numericPattern.FindAllString(reply, -1)
+	var suspicious []string
+	for _, n := range numbers {
+		numStr := strings.ReplaceAll(n, ",", "")
+		numStr = strings.TrimRight(numStr, "%GB MBTBkgkmm元美万亿米")
+		numStr = strings.TrimSpace(numStr)
+		if numStr == "" {
+			continue
 		}
-		if len(suspicious) > 0 {
-			result.NumericRisk = true
-			result.RiskNumbers = suspicious
-			result.ShouldUseCalc = true
+		val, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			continue
 		}
+		// 过滤年份（2000-2099）和个位数
+		if val >= 2000 && val <= 2099 {
+			continue
+		}
+		if val < 10 {
+			continue
+		}
+		suspicious = append(suspicious, n)
+	}
+	if len(suspicious) > 0 {
+		result.NumericRisk = true
+		result.RiskNumbers = suspicious
+		result.ShouldUseCalc = true
 	}
 
 	return result

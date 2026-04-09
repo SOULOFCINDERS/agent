@@ -13,7 +13,6 @@ import (
 //   - 输入 guardrail
 //   - 注入相关记忆
 //   - 短期记忆压缩
-//   - proactive search 检测
 //
 // 返回处理后的 history 和可能的 guardrail 拦截结果。
 // 如果 blocked != ""，调用方应直接返回该内容。
@@ -74,16 +73,6 @@ func (a *LoopAgent) prepareHistory(ctx context.Context, userMessage string, hist
 			})
 			history = cr.Messages
 		}
-	}
-
-	// Proactive Search
-	proactiveResult := detectProactiveSearch(userMessage, a.toolDefs)
-	if proactiveResult.ShouldSearch {
-		a.traceLog("proactive_search", map[string]any{
-			"entity": proactiveResult.Entity,
-			"reason": proactiveResult.Reason,
-		})
-		history = append(history, buildProactiveSearchMessage(proactiveResult.Entity))
 	}
 
 	return prepareResult{history: history}

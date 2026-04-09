@@ -43,13 +43,16 @@ func TestDetectFabrication_NumericRisk_CalcUsed(t *testing.T) {
 }
 
 func TestDetectFabrication_NumericRisk_NotCalcQuestion(t *testing.T) {
+	// After removing keyword-based intent routing, the post-hoc guard flags
+	// any reply with numbers > 10 when calc wasn't used. This is expected —
+	// the system prompt guides LLM to use the right tool upfront.
 	toolDefs := []llm.ToolDef{{Function: llm.FuncDef{Name: "calc"}}}
 	history := []llm.Message{}
 	reply := "MacBook Pro 售价 14999 元起"
 
 	result := DetectFabrication("MacBook Pro 多少钱", reply, history, toolDefs)
-	if result.NumericRisk {
-		t.Error("price query should not trigger numeric risk")
+	if !result.NumericRisk {
+		t.Error("post-hoc guard should flag numbers in reply when calc not used")
 	}
 }
 
