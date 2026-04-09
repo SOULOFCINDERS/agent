@@ -404,3 +404,64 @@ func truncateForEvent(s string, maxLen int) string {
 	}
 	return string(runes[:maxLen]) + "..."
 }
+
+// collectWithFirst 从一个已经读取了 firstDelta 的 StreamReader 中收集完整响应
+func collectWithFirst(sr *llm.StreamReader, first *llm.StreamDelta) (*llm.ChatResponse, error) {
+	if first.Done {
+		msg := llm.Message{Role: "assistant", Content: first.Content}
+		if len(first.ToolCalls) > 0 {
+			for _, tcd := range first.ToolCalls {
+				msg.ToolCalls = append(msg.ToolCalls, llm.ToolCall{
+					ID:   tcd.ID,
+					Type: tcd.Type,
+					Function: llm.FunctionCall{
+						Name:      tcd.Function.Name,
+						Arguments: tcd.Function.Arguments,
+					},
+				})
+			}
+		}
+		return &llm.ChatResponse{
+			Message:      msg,
+			FinishReason: first.FinishReason,
+		}, nil
+	}
+
+	resp, err := sr.Collect()
+	if err != nil {
+		return nil, err
+	}
+
+	resp.Message.Content = first.Content + resp.Message.Content
+
+	if len(first.ToolCalls) > 0 && len(resp.Message.ToolCalls) > 0 {
+		for _, ftc := range first.ToolCalls {
+			if ftc.Index < len(resp.Message.ToolCalls) {
+				tc := &resp.Message.ToolCalls[ftc.Index]
+				if ftc.ID != "" && tc.ID == "" {
+					tc.ID = ftc.ID
+				}
+				if ftc.Type != "" && tc.Type == "" {
+					tc.Type = ftc.Type
+				}
+				if ftc.Function.Name != "" && tc.Function.Name == "" {
+					tc.Function.Name = ftc.Function.Name
+				}
+				tc.Function.Arguments = ftc.Function.Arguments + tc.Function.Arguments
+			}
+		}
+	} else if len(first.ToolCalls) > 0 {
+		for _, tcd := range first.ToolCalls {
+			resp.Message.ToolCalls = append(resp.Message.ToolCalls, llm.ToolCall{
+				ID:   tcd.ID,
+				Type: tcd.Type,
+				Function: llm.FunctionCall{
+					Name:      tcd.Function.Name,
+					Arguments: tcd.Function.Arguments,
+				},
+			})
+		}
+	}
+
+	return resp, nil
+}
