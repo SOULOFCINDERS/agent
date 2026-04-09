@@ -1,8 +1,4 @@
-// Package web implements the HTTP server for the Agent web interface with streaming chat support.
-package web
 
-func buildStyleCSS() string {
-	return `
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
@@ -608,6 +604,4 @@ body {
     .context-bar { flex-direction: column; gap: 10px; min-height: auto; }
     .ctx-divider { width: 100%; height: 1px; }
     .ctx-section:first-child { flex: 1; }
-}
-`
 }

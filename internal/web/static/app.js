@@ -1,8 +1,4 @@
-package web
-
-func buildAppJS() string {
-	// 注意: JS 中不使用反引号模板字符串，避免 Go raw string 冲突
-	return `(function() {
+(function() {
     var chatContainer = document.getElementById('chatContainer');
     var messageInput = document.getElementById('messageInput');
     var sendBtn = document.getElementById('sendBtn');
@@ -744,5 +740,4 @@ func buildAppJS() string {
         sessionId = '';
         refreshSessionList();
     }
-})();`
-}
+})();
