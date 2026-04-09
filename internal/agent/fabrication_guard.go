@@ -380,12 +380,12 @@ func hasSpecificBookQuote(reply string, bookName string) bool {
 	if idx < 0 {
 		return false
 	}
-	end := idx + len(bookName) + 200
-	runes := []rune(reply)
-	if end > len(runes) {
-		end = len(runes)
+	// 使用字节切片而非 rune 切片，因为 strings.Index 返回字节偏移
+	end := idx + len(bookName) + 600 // 用字节长度，中文约3字节/字，600字节≈200中文字符
+	if end > len(reply) {
+		end = len(reply)
 	}
-	nearby := string(runes[idx:end])
+	nearby := reply[idx:end]
 	return strings.ContainsAny(nearby, "\"\"''「」『』") ||
 		strings.Contains(nearby, "指出") ||
 		strings.Contains(nearby, "写道") ||

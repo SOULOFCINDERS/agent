@@ -1,0 +1,140 @@
+{
+  "total": 10,
+  "func_correct": 10,
+  "args_correct": 3,
+  "func_accuracy": 100,
+  "args_accuracy": 30,
+  "category": "testdata/bfcl/BFCL_v3_exec_simple.json",
+  "results": [
+    {
+      "id": "exec_simple_0",
+      "question": "I've been playing a game where rolling a six is somehow more likely than usual, and the chance of it...",
+      "expected_func": [
+        "calc_binomial_probability"
+      ],
+      "actual_func": [
+        "calc_binomial_probability"
+      ],
+      "func_match": true,
+      "args_match": true,
+      "raw_tool_calls": "[{\"id\":\"call_58331ce314c34556998c81\",\"type\":\"function\",\"function\":{\"name\":\"calc_binomial_probability\",\"arguments\":\"{\\\"k\\\": 5, \\\"n\\\": 20, \\\"p\\\": 0.6}\"}}]"
+    },
+    {
+      "id": "exec_simple_1",
+      "question": "During last night's basketball game, one of the star players was on fire, attempting a whopping 30 f...",
+      "expected_func": [
+        "calc_binomial_probability"
+      ],
+      "actual_func": [
+        "calc_binomial_probability"
+      ],
+      "func_match": true,
+      "args_match": true,
+      "raw_tool_calls": "[{\"id\":\"call_8b8d54daa2bd47c086f841\",\"type\":\"function\",\"function\":{\"name\":\"calc_binomial_probability\",\"arguments\":\"{\\\"k\\\": 15, \\\"n\\\": 30, \\\"p\\\": 0.5}\"}}]"
+    },
+    {
+      "id": "exec_simple_2",
+      "question": "I'm currently tweaking a machine learning model and I need to understand the similarity between two ...",
+      "expected_func": [
+        "calculate_cosine_similarity"
+      ],
+      "actual_func": [
+        "calculate_cosine_similarity"
+      ],
+      "func_match": true,
+      "args_match": false,
+      "raw_tool_calls": "[{\"id\":\"call_a02da86b7ea04f45b38053\",\"type\":\"function\",\"function\":{\"name\":\"calculate_cosine_similarity\",\"arguments\":\"{\\\"vectorA\\\": [0.5, 0.7, 0.2, 0.9, 0.1], \\\"vectorB\\\": [0.4, 0.6, 0.3, 0.8, 0.2]}\"}}]"
+    },
+    {
+      "id": "exec_simple_3",
+      "question": "I'm working on a project that involves comparing the attributes of different entities to determine h...",
+      "expected_func": [
+        "calculate_cosine_similarity"
+      ],
+      "actual_func": [
+        "calculate_cosine_similarity"
+      ],
+      "func_match": true,
+      "args_match": false,
+      "raw_tool_calls": "[{\"id\":\"call_cb4163d45cbc47aead118c\",\"type\":\"function\",\"function\":{\"name\":\"calculate_cosine_similarity\",\"arguments\":\"{\\\"vectorA\\\": [0.3, 0.8, 0.1, 0.6, 0.2], \\\"vectorB\\\": [0.5, 0.7, 0.4, 0.9, 0.3]}\"}}]"
+    },
+    {
+      "id": "exec_simple_4",
+      "question": "I'm working on a physics experiment and need to calculate the density of an object I have. It weighs...",
+      "expected_func": [
+        "calculate_density"
+      ],
+      "actual_func": [
+        "calculate_density"
+      ],
+      "func_match": true,
+      "args_match": false,
+      "raw_tool_calls": "[{\"id\":\"call_45862cf8edb24188801905\",\"type\":\"function\",\"function\":{\"name\":\"calculate_density\",\"arguments\":\"{\\\"mass\\\": 50.0, \\\"volume\\\": 10.0}\"}}]"
+    },
+    {
+      "id": "exec_simple_5",
+      "question": "I've got this strange object we've come across in our scientific research. It's pretty hefty, weighi...",
+      "expected_func": [
+        "calculate_density"
+      ],
+      "actual_func": [
+        "calculate_density"
+      ],
+      "func_match": true,
+      "args_match": false,
+      "raw_tool_calls": "[{\"id\":\"call_985550810ec548d4bcad37\",\"type\":\"function\",\"function\":{\"name\":\"calculate_density\",\"arguments\":\"{\\\"mass\\\": 120.0, \\\"volume\\\": 30.0}\"}}]"
+    },
+    {
+      "id": "exec_simple_6",
+      "question": "During our advanced physics experiment, we've been tracking this unique object which initially was m...",
+      "expected_func": [
+        "calculate_displacement"
+      ],
+      "actual_func": [
+        "calculate_displacement"
+      ],
+      "func_match": true,
+      "args_match": false,
+      "raw_tool_calls": "[{\"id\":\"call_a392dd9a01a240f1aa1d8e\",\"type\":\"function\",\"function\":{\"name\":\"calculate_displacement\",\"arguments\":\"{\\\"acceleration\\\": 9.8, \\\"initial_velocity\\\": 15.0, \\\"time\\\": 10.0}\"}}]"
+    },
+    {
+      "id": "exec_simple_7",
+      "question": "During the high-speed chase, when the driver accelerated the vehicle, it was initially moving at 25 ...",
+      "expected_func": [
+        "calculate_displacement"
+      ],
+      "actual_func": [
+        "calculate_displacement"
+      ],
+      "func_match": true,
+      "args_match": false,
+      "raw_tool_calls": "[{\"id\":\"call_514abe63b5ea455496a14e\",\"type\":\"function\",\"function\":{\"name\":\"calculate_displacement\",\"arguments\":\"{\\\"acceleration\\\": 15.0, \\\"initial_velocity\\\": 25.0, \\\"time\\\": 8.0}\"}}]"
+    },
+    {
+      "id": "exec_simple_8",
+      "question": "During our physics lab session, we're experimenting with electric fields and their effects on charge...",
+      "expected_func": [
+        "calculate_electrostatic_potential_energy"
+      ],
+      "actual_func": [
+        "calculate_electrostatic_potential_energy"
+      ],
+      "func_match": true,
+      "args_match": false,
+      "raw_tool_calls": "[{\"id\":\"call_c80997b43ba7445485da9f\",\"type\":\"function\",\"function\":{\"name\":\"calculate_electrostatic_potential_energy\",\"arguments\":\"{\\\"charge\\\": 5.0, \\\"voltage\\\": 10.0}\"}}]"
+    },
+    {
+      "id": "exec_simple_9",
+      "question": "I'm working on a physics simulation and I have a micro-particle here charged at 7.8 coulombs. It's p...",
+      "expected_func": [
+        "calculate_electrostatic_potential_energy"
+      ],
+      "actual_func": [
+        "calculate_electrostatic_potential_energy"
+      ],
+      "func_match": true,
+      "args_match": true,
+      "raw_tool_calls": "[{\"id\":\"call_ffc034cc773d4be6838bb4\",\"type\":\"function\",\"function\":{\"name\":\"calculate_electrostatic_potential_energy\",\"arguments\":\"{\\\"charge\\\": 7.8, \\\"voltage\\\": 15.2}\"}}]"
+    }
+  ]
+}
