@@ -8,6 +8,11 @@ func buildIndexHTML() string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Agent Chat</title>
     <link rel="stylesheet" href="/static/style.css">
+    <!-- Markdown 渲染: marked.js -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+    <!-- 代码语法高亮: highlight.js -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/github-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/highlight.min.js"></script>
 </head>
 <body>
     <div class="layout">

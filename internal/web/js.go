@@ -18,6 +18,49 @@ func buildAppJS() string {
     // 工具调用状态追踪
     var activeToolCards = {};
 
+    // ---- Markdown 渲染初始化 (marked.js + highlight.js) ----
+    var markedReady = (typeof marked !== 'undefined');
+    var hljsReady = (typeof hljs !== 'undefined');
+
+    if (markedReady) {
+        marked.setOptions({
+            breaks: true,
+            gfm: true,
+            highlight: function(code, lang) {
+                if (hljsReady && lang && hljs.getLanguage(lang)) {
+                    try { return hljs.highlight(code, { language: lang }).value; } catch (e) {}
+                }
+                if (hljsReady) {
+                    try { return hljs.highlightAuto(code).value; } catch (e) {}
+                }
+                return '';
+            }
+        });
+
+        // 自定义渲染器：为代码块添加复制按钮和语言标签
+        var renderer = new marked.Renderer();
+        renderer.code = function(obj) {
+            var code = obj.text || obj;
+            var lang = obj.lang || '';
+            var highlighted = '';
+            if (hljsReady && lang && hljs.getLanguage(lang)) {
+                try { highlighted = hljs.highlight(code, { language: lang }).value; } catch (e) { highlighted = escapeHtml(code); }
+            } else if (hljsReady) {
+                try { highlighted = hljs.highlightAuto(code).value; } catch (e) { highlighted = escapeHtml(code); }
+            } else {
+                highlighted = escapeHtml(code);
+            }
+            var langLabel = lang ? '<span class="code-lang-label">' + escapeHtml(lang) + '</span>' : '';
+            return '<div class="code-block-wrapper">' +
+                '<div class="code-block-header">' + langLabel +
+                '<button class="code-copy-btn" onclick="copyCodeBlock(this)" title="复制代码">&#x1f4cb; 复制</button>' +
+                '</div>' +
+                '<pre><code class="hljs' + (lang ? ' language-' + escapeHtml(lang) : '') + '">' + highlighted + '</code></pre>' +
+                '</div>';
+        };
+        marked.use({ renderer: renderer });
+    }
+
     checkStatus();
     messageInput.focus();
 
@@ -35,6 +78,21 @@ func buildAppJS() string {
         }
     });
     messageInput.addEventListener('input', autoResize);
+
+    // ---- 代码块复制功能 ----
+    window.copyCodeBlock = function(btn) {
+        var wrapper = btn.closest('.code-block-wrapper');
+        if (!wrapper) return;
+        var codeEl = wrapper.querySelector('code');
+        if (!codeEl) return;
+        var text = codeEl.textContent;
+        navigator.clipboard.writeText(text).then(function() {
+            var orig = btn.innerHTML;
+            btn.innerHTML = '&#x2705; 已复制';
+            btn.classList.add('copied');
+            setTimeout(function() { btn.innerHTML = orig; btn.classList.remove('copied'); }, 2000);
+        }).catch(function() {});
+    };
 
     // ---- 侧边栏与历史对话 ----
     var sidebar = document.getElementById('sidebar');
@@ -70,8 +128,8 @@ func buildAppJS() string {
             '<h2>Agent Chat</h2>' +
             '<p>Ready to assist!</p>' +
             '<div class="quick-actions">' +
-            '<button class="quick-btn" onclick="sendQuick(\x27列出当前目录\x27)">&#x1f4c2; 列出目录</button>' +
-            '<button class="quick-btn" onclick="sendQuick(\x27计算 (123+456)*789\x27)">&#x1f9ee; 计算</button>' +
+            '<button class="quick-btn" onclick="sendQuick(\\x27列出当前目录\\x27)">&#x1f4c2; 列出目录</button>' +
+            '<button class="quick-btn" onclick="sendQuick(\\x27计算 (123+456)*789\\x27)">&#x1f9ee; 计算</button>' +
             '</div></div>';
         updateContextInfo({
             max_input_tokens: 0, estimated_tokens: 0, usage_percent: 0,
@@ -292,7 +350,7 @@ func buildAppJS() string {
         var header = document.createElement('div');
         header.className = 'tool-card-header';
         header.innerHTML =
-            '<span class="tool-icon">⚙️</span>' +
+            '<span class="tool-icon">&#x2699;&#xfe0f;</span>' +
             '<span class="tool-name">' + escapeHtml(data.tool_name) + '</span>' +
             '<span class="tool-status-badge running">运行中...</span>';
 
@@ -476,7 +534,7 @@ func buildAppJS() string {
                 toolsContainer.className = 'tools-container';
                 var wrapper = document.createElement('div');
                 wrapper.className = 'message agent';
-                wrapper.innerHTML = '<div class="msg-avatar">🛠️</div>';
+                wrapper.innerHTML = '<div class="msg-avatar">&#x1f6e0;&#xfe0f;</div>';
                 wrapper.appendChild(toolsContainer);
                 chatContainer.appendChild(wrapper);
             }
@@ -579,7 +637,7 @@ func buildAppJS() string {
 
         var avatar = document.createElement('div');
         avatar.className = 'msg-avatar';
-        avatar.textContent = role === 'user' ? '👤' : '🤖';
+        avatar.textContent = role === 'user' ? '\uD83D\uDC64' : '\uD83E\uDD16';
 
         var contentDiv = document.createElement('div');
         contentDiv.className = 'msg-content';
@@ -593,30 +651,35 @@ func buildAppJS() string {
     }
 
     function updateMessageContent(el, content) {
-        el.innerHTML = renderMarkdown(content);
+        if (!content) { el.innerHTML = ''; return; }
+        if (markedReady) {
+            try {
+                el.innerHTML = marked.parse(content);
+                // 对未由自定义 renderer 处理的独立 code 块补充高亮
+                if (hljsReady) {
+                    var codeBlocks = el.querySelectorAll('pre code:not(.hljs)');
+                    for (var i = 0; i < codeBlocks.length; i++) {
+                        hljs.highlightElement(codeBlocks[i]);
+                    }
+                }
+            } catch (e) {
+                el.innerHTML = fallbackRenderMarkdown(content);
+            }
+        } else {
+            el.innerHTML = fallbackRenderMarkdown(content);
+        }
     }
 
-    function appendThinking() {
-        var div = document.createElement('div');
-        div.className = 'message agent';
-        div.innerHTML =
-            '<div class="msg-avatar">🤖</div>' +
-            '<div class="msg-content"><div class="thinking">' +
-            '<div class="thinking-dots"><span></span><span></span><span></span></div>' +
-            ' thinking...</div></div>';
-        chatContainer.appendChild(div);
-        scrollToBottom();
-        return div;
-    }
-
-    function renderMarkdown(text) {
+    // 后备简易 Markdown 渲染（CDN 加载失败时使用）
+    function fallbackRenderMarkdown(text) {
         if (!text) return '';
         var html = escapeHtml(text);
         // code blocks
-        html = html.replace(/` + "`" + `{3}(\w*)\n([\s\S]*?)` + "`" + `{3}/g, function(match, lang, code) {
+        var bt = String.fromCharCode(96);
+        html = html.replace(new RegExp(bt+'{3}(\\w*)\\n([\\s\\S]*?)'+bt+'{3}', 'g'), function(match, lang, code) {
             return '<pre><code class="lang-' + lang + '">' + code + '</code></pre>';
         });
-        html = html.replace(/` + "`" + `([^` + "`" + `]+)` + "`" + `/g, '<code>$1</code>');
+        html = html.replace(new RegExp(bt+'([^'+bt+']+)'+bt, 'g'), '<code>$1</code>');
         html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
         html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
         html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
@@ -628,6 +691,19 @@ func buildAppJS() string {
         html = '<p>' + html + '</p>';
         html = html.replace(/<p>\s*<\/p>/g, '');
         return html;
+    }
+
+    function appendThinking() {
+        var div = document.createElement('div');
+        div.className = 'message agent';
+        div.innerHTML =
+            '<div class="msg-avatar">\uD83E\uDD16</div>' +
+            '<div class="msg-content"><div class="thinking">' +
+            '<div class="thinking-dots"><span></span><span></span><span></span></div>' +
+            ' thinking...</div></div>';
+        chatContainer.appendChild(div);
+        scrollToBottom();
+        return div;
     }
 
     function escapeHtml(str) {
@@ -652,12 +728,12 @@ func buildAppJS() string {
         activeToolCards = {};
         chatContainer.innerHTML =
             '<div class="welcome-msg">' +
-            '<div class="welcome-icon">🤖</div>' +
+            '<div class="welcome-icon">\uD83E\uDD16</div>' +
             '<h2>Agent Chat</h2>' +
             '<p>Ready to assist!</p>' +
             '<div class="quick-actions">' +
-            '<button class="quick-btn" onclick="sendQuick(\x27列出当前目录\x27)">📂 列出目录</button>' +
-            '<button class="quick-btn" onclick="sendQuick(\x27计算 (123+456)*789\x27)">🧮 计算</button>' +
+            '<button class="quick-btn" onclick="sendQuick(\\x27列出当前目录\\x27)">\uD83D\uDCC2 列出目录</button>' +
+            '<button class="quick-btn" onclick="sendQuick(\\x27计算 (123+456)*789\\x27)">\uD83E\uDDEE 计算</button>' +
             '</div></div>';
         updateContextInfo({
             max_input_tokens: 0, estimated_tokens: 0, usage_percent: 0,

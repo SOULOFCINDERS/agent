@@ -377,20 +377,192 @@ body {
 }
 .message.user .msg-content { background: var(--user-bg); border-bottom-right-radius: 4px; }
 .message.agent .msg-content { background: var(--agent-bg); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
-.msg-content pre {
-    background: #111; padding: 12px; border-radius: 8px;
-    overflow-x: auto; margin: 8px 0; font-size: 13px;
-}
-.msg-content code {
-    background: #2a2a2a; padding: 1px 5px; border-radius: 4px;
-    font-size: 13px; font-family: "SF Mono", Monaco, monospace;
-}
-.msg-content pre code { background: none; padding: 0; }
+
+/* ---- Markdown 渲染样式 ---- */
+
+/* 标题 */
+.msg-content h1 { font-size: 1.5em; font-weight: 700; margin: 16px 0 8px 0; color: #fff; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.msg-content h2 { font-size: 1.3em; font-weight: 700; margin: 14px 0 6px 0; color: #fff; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.msg-content h3 { font-size: 1.15em; font-weight: 600; margin: 12px 0 4px 0; color: #f0f0f0; }
+.msg-content h4 { font-size: 1.05em; font-weight: 600; margin: 10px 0 4px 0; color: #e8e8e8; }
+.msg-content h5, .msg-content h6 { font-size: 1em; font-weight: 600; margin: 8px 0 4px 0; color: #ddd; }
+
+/* 段落与文本 */
 .msg-content p { margin: 6px 0; }
-.msg-content ul, .msg-content ol { padding-left: 20px; margin: 6px 0; }
+.msg-content strong { color: #fff; }
+.msg-content em { color: #ccc; font-style: italic; }
+
+/* 链接 */
 .msg-content a { color: var(--accent); text-decoration: none; }
 .msg-content a:hover { text-decoration: underline; }
-.msg-content strong { color: #fff; }
+
+/* 列表 */
+.msg-content ul, .msg-content ol { padding-left: 24px; margin: 8px 0; }
+.msg-content li { margin: 3px 0; line-height: 1.6; }
+.msg-content li > ul, .msg-content li > ol { margin: 2px 0; }
+.msg-content ul { list-style-type: disc; }
+.msg-content ul ul { list-style-type: circle; }
+.msg-content ul ul ul { list-style-type: square; }
+
+/* 任务列表 (GFM) */
+.msg-content ul li input[type="checkbox"] {
+    margin-right: 6px;
+    accent-color: var(--accent);
+}
+
+/* 引用块 */
+.msg-content blockquote {
+    border-left: 3px solid var(--accent);
+    margin: 10px 0;
+    padding: 8px 14px;
+    background: rgba(79, 143, 247, 0.06);
+    color: #bbb;
+    border-radius: 0 6px 6px 0;
+}
+.msg-content blockquote p { margin: 4px 0; }
+.msg-content blockquote blockquote { margin-left: 8px; border-left-color: #555; }
+
+/* 水平分隔线 */
+.msg-content hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 16px 0;
+}
+
+/* 表格 */
+.msg-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: 13px;
+    border-radius: 6px;
+    overflow: hidden;
+}
+.msg-content thead th {
+    background: var(--surface2);
+    color: #fff;
+    font-weight: 600;
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 2px solid var(--border);
+}
+.msg-content tbody td {
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+}
+.msg-content tbody tr:last-child td { border-bottom: none; }
+.msg-content tbody tr:hover { background: rgba(255, 255, 255, 0.03); }
+
+/* 行内代码 */
+.msg-content code {
+    background: #2a2a2a;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    font-family: "SF Mono", "Fira Code", Monaco, Consolas, "Courier New", monospace;
+    color: #e6db74;
+}
+
+/* 代码块包装器 */
+.code-block-wrapper {
+    margin: 12px 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0d1117;
+}
+.code-block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 12px;
+    background: #161b22;
+    border-bottom: 1px solid var(--border);
+    min-height: 32px;
+}
+.code-lang-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+}
+.code-copy-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.code-copy-btn:hover {
+    color: var(--text);
+    border-color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.05);
+}
+.code-copy-btn.copied {
+    color: var(--success);
+    border-color: var(--success);
+}
+
+/* 代码块内的 pre/code */
+.code-block-wrapper pre {
+    margin: 0;
+    padding: 14px 16px;
+    overflow-x: auto;
+    background: #0d1117;
+    border-radius: 0;
+}
+.code-block-wrapper pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #c9d1d9;
+    font-family: "SF Mono", "Fira Code", Monaco, Consolas, "Courier New", monospace;
+}
+
+/* 非包装器的 pre/code（后备渲染） */
+.msg-content > pre,
+.msg-content p > pre {
+    background: #0d1117;
+    padding: 14px 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 10px 0;
+    border: 1px solid var(--border);
+}
+.msg-content pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: 13px;
+    color: #c9d1d9;
+}
+
+/* 图片 */
+.msg-content img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    margin: 8px 0;
+}
+
+/* 删除线 (GFM) */
+.msg-content del { color: var(--text-dim); text-decoration: line-through; }
+
+/* 脚注 */
+.msg-content .footnotes {
+    margin-top: 16px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-dim);
+}
 
 .thinking { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 13px; padding: 4px 0; }
 .thinking-text { font-style: italic; opacity: 0.7; }
