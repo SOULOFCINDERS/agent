@@ -30,6 +30,20 @@ type AgentDef struct {
 
 	// MaxIterations 子 Agent 最大迭代次数（默认 10）
 	MaxIterations int
+
+	// --- 改进 3: Token 预算控制 ---
+
+	// MaxTokenBudget 子 Agent 的最大 token 预算（0 表示无限制）
+	// 当子 Agent 累计消耗 token 超过此值时，停止 LLM 调用并返回当前结果
+	MaxTokenBudget int64
+
+	// --- 改进 4: 上下文白名单 ---
+
+	// AcceptContext 允许接收的上下文字段名列表
+	// 编排 Agent 通过 HandoffTool 的 "context" 参数传入的上下文字符串
+	// 会被按行解析为 "key: value" 格式，只有 key 在白名单中的行才会被保留
+	// 为空表示接受所有上下文（向后兼容）
+	AcceptContext []string
 }
 
 // SubRegistry 根据 ToolNames 从全局 Registry 创建子集 Registry
@@ -91,6 +105,9 @@ func (d *AgentDef) Validate() error {
 	if d.SystemPrompt == "" {
 		return &ValidationError{Field: "SystemPrompt", Message: "system prompt is required"}
 	}
+	if d.MaxTokenBudget < 0 {
+		return &ValidationError{Field: "MaxTokenBudget", Message: "token budget must be >= 0"}
+	}
 	return nil
 }
 
@@ -119,8 +136,9 @@ func ResearchAgentDef() AgentDef {
 3. 综合多个来源，给出结构化的回答
 4. 注明信息来源
 5. 区分事实和观点`,
-		ToolNames:     []string{"web_search", "web_fetch", "summarize"},
-		MaxIterations: 10,
+		ToolNames:      []string{"web_search", "web_fetch", "summarize"},
+		MaxIterations:  10,
+		MaxTokenBudget: 50000, // 50K token 预算
 	}
 }
 
@@ -137,8 +155,9 @@ func CodeAgentDef() AgentDef {
 3. 用 read_file 读取具体文件
 4. 给出清晰的代码分析和建议
 5. 引用具体的文件路径和行号`,
-		ToolNames:     []string{"read_file", "list_dir", "grep_repo", "summarize"},
-		MaxIterations: 10,
+		ToolNames:      []string{"read_file", "list_dir", "grep_repo", "summarize"},
+		MaxIterations:  10,
+		MaxTokenBudget: 80000, // 80K token 预算（代码分析需要更多）
 	}
 }
 
@@ -155,7 +174,8 @@ func WriterAgentDef() AgentDef {
 3. 重要信息用列表或表格呈现
 4. 如需创建飞书文档，调用 feishu_create_doc
 5. 确保文档可读性和专业性`,
-		ToolNames:     []string{"feishu_read_doc", "feishu_create_doc", "read_file", "summarize"},
-		MaxIterations: 8,
+		ToolNames:      []string{"feishu_read_doc", "feishu_create_doc", "read_file", "summarize"},
+		MaxIterations:  8,
+		MaxTokenBudget: 40000, // 40K token 预算
 	}
 }

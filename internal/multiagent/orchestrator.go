@@ -32,28 +32,20 @@ import (
 //   3. 子 Agent 执行完毕，结果作为 tool result 返回给编排 Agent
 //   4. 编排 Agent 整合结果，返回最终回复
 //
-// ## 为什么不用静态 DAG?
+// ## 上下文污染防护
 //
-// 静态 DAG（预定义任务流）需要提前知道任务分解方式，无法处理开放域问题。
-// LLM 驱动的编排让系统能根据任务动态决定调用哪些子 Agent、以什么顺序调用。
-//
-// ## Token 流向
-//
-//   用户 → 编排 Agent (LLM call #1)
-//                ↓ tool_call: research_agent(task="xxx")
-//          子 Agent: research (LLM call #2, #3, ...)
-//                ↓ tool_result: "搜索结果..."
-//          编排 Agent (LLM call #4)
-//                ↓ tool_call: writer_agent(task="用上述结果写文档")
-//          子 Agent: writer (LLM call #5, #6, ...)
-//                ↓ tool_result: "文档已创建..."
-//          编排 Agent (LLM call #7) → 最终回复
+// 改进2: 编排器层历史窗口管理
+//   - maxHistoryTokens 控制编排 Agent 的上下文窗口大小
+//   - compactOrchestratorHistory 在每轮对话前检查并压缩老旧的 tool_result
 //
 type Orchestrator struct {
 	orchestratorAgent *agent.LoopAgent
 	agentDefs         []AgentDef
 	handoffTools      []*HandoffTool
 	traceW            io.Writer
+
+	// --- 改进2: 编排器层历史窗口管理 ---
+	maxHistoryTokens int // 编排 Agent 历史的最大 token 数（0 = 无限制）
 }
 
 // OrchestratorConfig 编排器配置
@@ -82,6 +74,13 @@ type OrchestratorConfig struct {
 
 	// TraceWriter trace 输出
 	TraceWriter io.Writer
+
+	// --- 改进2: 编排器历史窗口 ---
+
+	// MaxHistoryTokens 编排 Agent 历史的最大 token 数
+	// 当历史 token 超过此值时，会压缩老旧的 tool_result 消息
+	// 0 表示无限制（向后兼容）
+	MaxHistoryTokens int
 }
 
 // NewOrchestrator 创建多 Agent 编排器
@@ -158,6 +157,7 @@ func NewOrchestrator(cfg OrchestratorConfig) (*Orchestrator, error) {
 		agentDefs:         cfg.AgentDefs,
 		handoffTools:      handoffTools,
 		traceW:            cfg.TraceWriter,
+		maxHistoryTokens:  cfg.MaxHistoryTokens,
 	}, nil
 }
 
@@ -168,13 +168,18 @@ func (o *Orchestrator) Chat(ctx context.Context, userMessage string, history []l
 		"agents":           len(o.agentDefs),
 	})
 
+	// --- 改进2: 对话前检查并压缩历史 ---
+	if o.maxHistoryTokens > 0 && len(history) > 0 {
+		history = compactOrchestratorHistory(history, o.maxHistoryTokens)
+	}
+
 	start := time.Now()
 	reply, newHistory, err := o.orchestratorAgent.Chat(ctx, userMessage, history)
 
 	o.traceLogOrch("orchestrator_done", map[string]any{
-		"elapsed": time.Since(start).String(),
+		"elapsed":   time.Since(start).String(),
 		"reply_len": len(reply),
-		"error":   fmt.Sprint(err),
+		"error":     fmt.Sprint(err),
 	})
 
 	return reply, newHistory, err
@@ -182,11 +187,17 @@ func (o *Orchestrator) Chat(ctx context.Context, userMessage string, history []l
 
 // ChatStream 流式版本
 func (o *Orchestrator) ChatStream(ctx context.Context, userMessage string, history []llm.Message, onDelta agent.StreamWriter) (string, []llm.Message, error) {
+	if o.maxHistoryTokens > 0 && len(history) > 0 {
+		history = compactOrchestratorHistory(history, o.maxHistoryTokens)
+	}
 	return o.orchestratorAgent.ChatStream(ctx, userMessage, history, onDelta)
 }
 
 // ChatStreamV2 增强版流式对话（委托给编排 Agent）
 func (o *Orchestrator) ChatStreamV2(ctx context.Context, userMessage string, history []llm.Message, onEvent agent.StreamEventWriter) (string, []llm.Message, error) {
+	if o.maxHistoryTokens > 0 && len(history) > 0 {
+		history = compactOrchestratorHistory(history, o.maxHistoryTokens)
+	}
 	return o.orchestratorAgent.ChatStreamV2(ctx, userMessage, history, onEvent)
 }
 
@@ -198,6 +209,11 @@ func (o *Orchestrator) GetAgent() *agent.LoopAgent {
 // AgentDefs 返回所有子 Agent 定义
 func (o *Orchestrator) AgentDefs() []AgentDef {
 	return o.agentDefs
+}
+
+// SetMaxHistoryTokens 动态设置编排历史窗口大小
+func (o *Orchestrator) SetMaxHistoryTokens(n int) {
+	o.maxHistoryTokens = n
 }
 
 func (o *Orchestrator) traceLogOrch(event string, data map[string]any) {
@@ -214,6 +230,79 @@ func (o *Orchestrator) traceLogOrch(event string, data map[string]any) {
 	}
 	b, _ := json.Marshal(entry)
 	fmt.Fprintf(o.traceW, "%s\n", b)
+}
+
+// ============================================================
+// 改进2: compactOrchestratorHistory — 编排器层历史窗口管理
+// ============================================================
+
+// compactOrchestratorHistory 压缩编排 Agent 的历史消息
+//
+// 策略：从最老的消息开始，将超长的 tool_result 消息截断为摘要标记。
+// tool_result 是最主要的膨胀来源（子 Agent 可能返回大量文本）。
+//
+// 保护规则：
+//   - system 消息永远不动
+//   - 最近 4 条消息永远不动（保证当前轮次的上下文完整性）
+//   - 只压缩 role="tool" 的消息
+//
+// 压缩方式：保留前 100 字符 + "[已压缩]" 标记
+func compactOrchestratorHistory(history []llm.Message, maxTokens int) []llm.Message {
+	totalTokens := estimateHistoryTokens(history)
+	if totalTokens <= maxTokens {
+		return history
+	}
+
+	// 复制一份，避免修改原始 slice
+	result := make([]llm.Message, len(history))
+	copy(result, history)
+
+	// 保护最近 4 条消息
+	protectedCount := 4
+	if protectedCount > len(result) {
+		protectedCount = len(result)
+	}
+	compactEnd := len(result) - protectedCount
+
+	// 从最老的开始压缩 tool_result
+	for i := 0; i < compactEnd && totalTokens > maxTokens; i++ {
+		if result[i].Role != "tool" {
+			continue
+		}
+
+		originalTokens := estimateStringTokens(result[i].Content)
+		if originalTokens <= 100 {
+			// 已经很短了，跳过
+			continue
+		}
+
+		// 截断：保留前 200 字符
+		truncated := result[i].Content
+		if len(truncated) > 200 {
+			truncated = truncated[:200]
+		}
+		result[i].Content = fmt.Sprintf("%s\n\n[上下文已压缩，原文约 %d tokens]", truncated, originalTokens)
+
+		newTokens := estimateStringTokens(result[i].Content)
+		totalTokens -= (originalTokens - newTokens)
+	}
+
+	return result
+}
+
+// estimateHistoryTokens 估算整个历史的 token 数
+func estimateHistoryTokens(history []llm.Message) int {
+	total := 0
+	for _, msg := range history {
+		total += estimateStringTokens(msg.Content)
+		// tool call 参数也计入
+		for _, tc := range msg.ToolCalls {
+			total += estimateStringTokens(tc.Function.Arguments)
+		}
+		// 每条消息约 4 token overhead (role, formatting)
+		total += 4
+	}
+	return total
 }
 
 // buildDefaultOrchestratorPrompt 生成编排 Agent 的默认 system prompt
