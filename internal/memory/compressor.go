@@ -49,6 +49,7 @@ type Compressor struct {
 	maxMessages  int // 触发压缩的消息数阈值（0 = 禁用消息数触发）
 	maxTokens    int // 触发压缩的 token 估算阈值（0 = 禁用 token 触发）
 	targetTokens int // 压缩后的目标 token 数（用于动态调整 windowSize）
+	metrics      *MemoryMetrics
 }
 
 // CompressorConfig 压缩器配置
@@ -85,6 +86,11 @@ func NewCompressor(client llm.Client, cfg CompressorConfig) *Compressor {
 		maxTokens:    cfg.MaxTokens,
 		targetTokens: cfg.TargetTokens,
 	}
+}
+
+// SetMetrics 注入指标采集器
+func (c *Compressor) SetMetrics(m *MemoryMetrics) {
+	c.metrics = m
 }
 
 // ================================================================
@@ -220,6 +226,12 @@ func (c *Compressor) Compress(ctx context.Context, history []llm.Message) (*Comp
 	result.Messages = newHistory
 	result.CompressedCount = len(newHistory)
 	result.EstimatedTokens = estimateTokens(newHistory)
+
+	// 指标采集
+	if c.metrics != nil {
+		originalTokens := estimateTokens(history)
+		c.metrics.TrackCompression(originalTokens, result.EstimatedTokens, result.OriginalCount, result.CompressedCount, result.Incremental)
+	}
 
 	return result, nil
 }

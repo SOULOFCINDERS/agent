@@ -28,6 +28,7 @@ type Store struct {
 	filePath string
 	nextID   int
 	detector *ConflictDetector
+	metrics  *MemoryMetrics
 }
 
 // NewStore 创建/加载一个记忆存储
@@ -59,6 +60,16 @@ func NewStore(dataDir string) (*Store, error) {
 	}
 
 	return s, nil
+}
+
+// SetMetrics 注入指标采集器
+func (s *Store) SetMetrics(m *MemoryMetrics) {
+	s.metrics = m
+}
+
+// Metrics 获取指标采集器
+func (s *Store) Metrics() *MemoryMetrics {
+	return s.metrics
 }
 
 // Add 添加一条记忆（含 P0→P1→P2→P3 冲突检测流水线）
@@ -97,6 +108,10 @@ func (s *Store) Add(topic, content string, keywords []string) AddResult {
 			s.entries[i].Keywords = keywords
 		}
 		s.save()
+		// 指标采集: P0 同 Topic 覆盖
+		if s.metrics != nil {
+			s.metrics.TrackConflict(string(result.Conflict.Type), true, 0)
+		}
 		result.Entry = s.entries[i]
 		return result
 	}
@@ -179,6 +194,7 @@ func (s *Store) Add(topic, content string, keywords []string) AddResult {
 
 // Search 搜索记忆，返回按相关度排序的结果（仅返回 active 记忆）
 func (s *Store) Search(query string, limit int) []Entry {
+	searchStart := time.Now()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -218,6 +234,15 @@ func (s *Store) Search(query string, limit int) []Entry {
 		out[i] = r.entry
 		s.touchEntry(r.entry.ID)
 	}
+	// 指标采集
+	if s.metrics != nil {
+		topScore := 0.0
+		if len(results) > 0 {
+			topScore = results[0].score
+		}
+		s.metrics.TrackSearch(query, len(out), topScore, time.Since(searchStart))
+	}
+
 	return out
 }
 

@@ -69,6 +69,7 @@ type MemoryCompactor struct {
 	llmClient llm.Client
 	embedder  *rag.TFIDFEmbedder
 	cfg       CompactorConfig
+	metrics   *MemoryMetrics
 }
 
 // NewMemoryCompactor 创建记忆合并器
@@ -88,6 +89,11 @@ func NewMemoryCompactor(store *Store, client llm.Client, cfg CompactorConfig) *M
 		embedder:  rag.NewTFIDFEmbedder(256),
 		cfg:       cfg,
 	}
+}
+
+// SetMetrics 注入指标采集器
+func (mc *MemoryCompactor) SetMetrics(m *MemoryMetrics) {
+	mc.metrics = m
 }
 
 // ================================================================
@@ -187,6 +193,11 @@ func (mc *MemoryCompactor) Compact(ctx context.Context) (*CompactResult, error) 
 
 	// Step 7: 持久化
 	mc.store.save()
+
+	// 指标采集
+	if mc.metrics != nil {
+		mc.metrics.TrackCompaction(result.ClustersFound, result.EntriesMerged, result.EntriesCreated)
+	}
 
 	return result, nil
 }
