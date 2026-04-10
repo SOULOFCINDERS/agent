@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -18,6 +19,7 @@ import (
 // ---------- 类型别名：从 domain/memory 引入 ----------
 
 type Entry = dmem.Entry
+type AddResult = dmem.AddResult
 
 // Store 是记忆的持久化存储（具体实现）
 type Store struct {
@@ -25,6 +27,7 @@ type Store struct {
 	entries  []Entry
 	filePath string
 	nextID   int
+	detector *ConflictDetector
 }
 
 // NewStore 创建/加载一个记忆存储
@@ -37,6 +40,7 @@ func NewStore(dataDir string) (*Store, error) {
 	s := &Store{
 		filePath: fp,
 		nextID:   1,
+		detector: NewConflictDetector(),
 	}
 
 	// 尝试加载已有数据
@@ -57,42 +61,123 @@ func NewStore(dataDir string) (*Store, error) {
 	return s, nil
 }
 
-// Add 添加一条记忆
-func (s *Store) Add(topic, content string, keywords []string) Entry {
+// Add 添加一条记忆（含 P0→P1→P2→P3 冲突检测流水线）
+func (s *Store) Add(topic, content string, keywords []string) AddResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	ctx := context.Background()
 	now := time.Now()
+	result := AddResult{}
 
-	// 检查是否有相同 topic 的记忆，如果有则更新
+	// ============================================================
+	// P0: 同 Topic 覆盖（最常见路径）
+	// ============================================================
 	for i, e := range s.entries {
-		if strings.EqualFold(e.Topic, topic) {
-			s.entries[i].Content = content
-			s.entries[i].UpdatedAt = now
-			if len(keywords) > 0 {
-				s.entries[i].Keywords = keywords
+		if !e.IsActive() || !strings.EqualFold(e.Topic, topic) {
+			continue
+		}
+		// 同 topic 旧记忆存在 → 就地更新
+		result.Conflict = &dmem.ConflictResult{
+			Type:          dmem.ConflictExplicit,
+			ConflictingID: e.ID,
+			OldContent:    e.Content,
+			NewContent:    content,
+			AutoResolved:  true,
+			Resolution:    fmt.Sprintf("同主题更新 v%d→v%d", e.Version, e.Version+1),
+		}
+		s.entries[i].Content = content
+		s.entries[i].UpdatedAt = now
+		s.entries[i].Version++
+		s.entries[i].Confidence = 1.0
+		if s.detector != nil {
+			s.entries[i].Embedding = s.detector.ComputeEmbedding(ctx, content)
+		}
+		if len(keywords) > 0 {
+			s.entries[i].Keywords = keywords
+		}
+		s.save()
+		result.Entry = s.entries[i]
+		return result
+	}
+
+	// ============================================================
+	// P0: 显式否定检测（跨 topic）
+	// ============================================================
+	if s.detector != nil {
+		if cr := s.detector.DetectExplicitOverride(content, s.entries); cr != nil {
+			newID := fmt.Sprintf("mem_%d", s.nextID)
+			for i := range s.entries {
+				if s.entries[i].ID == cr.ConflictingID {
+					s.entries[i].SupersededBy = newID
+					break
+				}
 			}
-			s.save()
-			return s.entries[i]
+			result.Conflict = cr
 		}
 	}
 
+	// ============================================================
+	// P1 + P2: 语义匹配 + 置信度裁决（仅在 P0 未命中时）
+	// ============================================================
+	if result.Conflict == nil && s.detector != nil {
+		if cr := s.detector.DetectSemanticConflict(ctx, content, s.entries); cr != nil {
+			// 找到语义冲突的旧记忆，用 P2 置信度裁决
+			for _, e := range s.entries {
+				if e.ID == cr.ConflictingID {
+					autoResolve, keepNew := CompareConfidence(1.0, e.Confidence)
+					if autoResolve && keepNew {
+						cr.AutoResolved = true
+						cr.Resolution = "新记忆置信度更高，已自动取代旧记忆"
+						newID := fmt.Sprintf("mem_%d", s.nextID)
+						for j := range s.entries {
+							if s.entries[j].ID == cr.ConflictingID {
+								s.entries[j].SupersededBy = newID
+								break
+							}
+						}
+					} else if autoResolve && !keepNew {
+						cr.AutoResolved = true
+						cr.Resolution = "旧记忆置信度更高，新记忆已保存但请注意可能存在矛盾"
+					} else {
+						// P3: 无法自动裁决 → 需要用户确认
+						cr.Type = dmem.ConflictNeedConfirm
+						cr.AutoResolved = false
+						cr.Resolution = "置信度相近，建议用户确认"
+					}
+					result.Conflict = cr
+					break
+				}
+			}
+		}
+	}
+
+	// ============================================================
+	// 写入新记忆
+	// ============================================================
+	var emb []float64
+	if s.detector != nil {
+		emb = s.detector.ComputeEmbedding(ctx, content)
+	}
 	entry := Entry{
-		ID:        fmt.Sprintf("mem_%d", s.nextID),
-		Topic:     topic,
-		Content:   content,
-		Keywords:  keywords,
-		CreatedAt: now,
-		UpdatedAt: now,
-		AccessCnt: 0,
+		ID:         fmt.Sprintf("mem_%d", s.nextID),
+		Topic:      topic,
+		Content:    content,
+		Keywords:   keywords,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Version:    1,
+		Confidence: 1.0,
+		Embedding:  emb,
 	}
 	s.nextID++
 	s.entries = append(s.entries, entry)
 	s.save()
-	return entry
+	result.Entry = entry
+	return result
 }
 
-// Search 搜索记忆，返回按相关度排序的结果
+// Search 搜索记忆，返回按相关度排序的结果（仅返回 active 记忆）
 func (s *Store) Search(query string, limit int) []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -111,6 +196,9 @@ func (s *Store) Search(query string, limit int) []Entry {
 
 	var results []scored
 	for _, e := range s.entries {
+		if !e.IsActive() {
+			continue
+		}
 		score := relevanceScore(e, queryWords, query)
 		if score > 0 {
 			results = append(results, scored{entry: e, score: score})
@@ -133,25 +221,26 @@ func (s *Store) Search(query string, limit int) []Entry {
 	return out
 }
 
-// List 返回所有记忆，按更新时间倒序
+// List 返回所有活跃记忆，按更新时间倒序
 func (s *Store) List(limit int) []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if limit <= 0 || limit > len(s.entries) {
-		limit = len(s.entries)
+	var active []Entry
+	for _, e := range s.entries {
+		if e.IsActive() {
+			active = append(active, e)
+		}
 	}
 
-	sorted := make([]Entry, len(s.entries))
-	copy(sorted, s.entries)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].UpdatedAt.After(sorted[j].UpdatedAt)
+	sort.Slice(active, func(i, j int) bool {
+		return active[i].UpdatedAt.After(active[j].UpdatedAt)
 	})
 
-	if len(sorted) > limit {
-		sorted = sorted[:limit]
+	if limit > 0 && len(active) > limit {
+		active = active[:limit]
 	}
-	return sorted
+	return active
 }
 
 // Delete 删除一条记忆
@@ -169,11 +258,18 @@ func (s *Store) Delete(id string) bool {
 	return false
 }
 
-// Count 返回记忆总数
+// Count 返回活跃记忆总数
 func (s *Store) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.entries)
+
+	count := 0
+	for _, e := range s.entries {
+		if e.IsActive() {
+			count++
+		}
+	}
+	return count
 }
 
 // Summary 生成记忆摘要，用于注入 system prompt
@@ -181,7 +277,13 @@ func (s *Store) Summary(maxEntries int) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if len(s.entries) == 0 {
+	var active []Entry
+	for _, e := range s.entries {
+		if e.IsActive() {
+			active = append(active, e)
+		}
+	}
+	if len(active) == 0 {
 		return ""
 	}
 
@@ -189,28 +291,26 @@ func (s *Store) Summary(maxEntries int) string {
 		maxEntries = 20
 	}
 
-	sorted := make([]Entry, len(s.entries))
-	copy(sorted, s.entries)
 	now := time.Now()
-	sort.Slice(sorted, func(i, j int) bool {
-		si := float64(sorted[i].AccessCnt) + 10.0/math.Max(1, now.Sub(sorted[i].UpdatedAt).Hours()+1)
-		sj := float64(sorted[j].AccessCnt) + 10.0/math.Max(1, now.Sub(sorted[j].UpdatedAt).Hours()+1)
+	sort.Slice(active, func(i, j int) bool {
+		si := float64(active[i].AccessCnt) + 10.0/math.Max(1, now.Sub(active[i].UpdatedAt).Hours()+1)
+		sj := float64(active[j].AccessCnt) + 10.0/math.Max(1, now.Sub(active[j].UpdatedAt).Hours()+1)
 		return si > sj
 	})
 
-	if len(sorted) > maxEntries {
-		sorted = sorted[:maxEntries]
+	if len(active) > maxEntries {
+		active = active[:maxEntries]
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("你有 %d 条已保存的记忆：\n", len(s.entries)))
-	for _, e := range sorted {
+	b.WriteString(fmt.Sprintf("你有 %d 条已保存的记忆：\n", len(active)))
+	for _, e := range active {
 		b.WriteString(fmt.Sprintf("- [%s] %s: %s\n", e.Topic, e.ID, e.Content))
 	}
 	return b.String()
 }
 
-// RelevantSummary 根据当前查询返回相关记忆的摘要
+// RelevantSummary 根据当前查询返回相关记忆的摘要（仅 active，含时效标注）
 func (s *Store) RelevantSummary(query string, maxEntries int) string {
 	if maxEntries <= 0 {
 		maxEntries = 5
@@ -223,10 +323,51 @@ func (s *Store) RelevantSummary(query string, maxEntries int) string {
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("与当前对话相关的记忆（共 %d/%d 条）：\n", len(results), s.Count()))
+	b.WriteString("提醒：用户当前的明确指令优先于以下记忆。\n")
 	for _, e := range results {
-		b.WriteString(fmt.Sprintf("- [%s] %s\n", e.Topic, e.Content))
+		age := time.Since(e.UpdatedAt)
+		freshness := "🟢"
+		if age > 90*24*time.Hour {
+			freshness = "🔴"
+		} else if age > 30*24*time.Hour {
+			freshness = "🟡"
+		}
+		b.WriteString(fmt.Sprintf("- %s [%s] %s", freshness, e.Topic, e.Content))
+		if e.Version > 1 {
+			b.WriteString(fmt.Sprintf(" (v%d, 更新于%s)", e.Version, e.UpdatedAt.Format("2006-01-02")))
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// DecayConfidence 对所有记忆执行时间衰减（建议在会话开始时调用一次）
+// 半衰期 90 天，访问频率加成
+func (s *Store) DecayConfidence() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	changed := false
+	for i, e := range s.entries {
+		if !e.IsActive() {
+			continue
+		}
+		daysSinceUpdate := now.Sub(e.UpdatedAt).Hours() / 24.0
+		// 半衰期 90 天
+		newConf := math.Pow(0.5, daysSinceUpdate/90.0)
+		// 访问频率加成（上限 0.3）
+		accessBonus := math.Min(0.3, float64(e.AccessCnt)*0.02)
+		newConf = math.Min(1.0, newConf+accessBonus)
+
+		if math.Abs(newConf-s.entries[i].Confidence) > 0.01 {
+			s.entries[i].Confidence = newConf
+			changed = true
+		}
+	}
+	if changed {
+		s.save()
+	}
 }
 
 // --- 内部方法 ---

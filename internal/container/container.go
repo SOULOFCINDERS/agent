@@ -154,6 +154,14 @@ func BuildDefaultSystemPrompt() string {
 - **绝对不要心算**。任何数值计算都使用 calc 工具。
 - **绝对不要编造 URL**。只使用工具实际返回的链接。
 
+## 记忆冲突处理
+- 保存记忆时如果工具返回 conflict_type 字段，必须告知用户冲突情况
+- conflict_type="explicit_override"：已自动处理，简要告知用户旧记忆已更新
+- conflict_type="semantic_conflict"：已自动裁决，告知用户检测到了冲突并说明处理结果
+- conflict_type="need_confirm"：**必须**向用户确认是否删除旧的矛盾记忆
+- 用户当前的明确指令永远优先于已保存的记忆
+- 记忆标注 🔴 表示超过 90 天未更新，使用时需要向用户确认是否仍然有效
+
 ## 其他工具规则
 1. 返回结果时请用中文，简洁明了
 2. 文件路径都是相对于工作根目录的

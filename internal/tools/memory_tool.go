@@ -50,13 +50,46 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, args map[string]any) (any,
 		}
 	}
 
-	entry := t.store.Add(topic, content, keywords)
-	return map[string]any{
+	addResult := t.store.Add(topic, content, keywords)
+
+	resp := map[string]any{
 		"status": "saved",
-		"id":     entry.ID,
-		"topic":  entry.Topic,
-		"message": fmt.Sprintf("已保存记忆 [%s]: %s", entry.Topic, entry.Content),
-	}, nil
+		"id":     addResult.Entry.ID,
+		"topic":  addResult.Entry.Topic,
+	}
+
+	if addResult.Conflict != nil {
+		c := addResult.Conflict
+		resp["conflict_type"] = string(c.Type)
+		resp["conflict_id"] = c.ConflictingID
+		resp["old_content"] = c.OldContent
+
+		switch c.Type {
+		case "explicit_override":
+			resp["message"] = fmt.Sprintf(
+				"已保存。旧记忆「%s」已被取代（%s）",
+				truncStr(c.OldContent, 60), c.Resolution,
+			)
+		case "semantic_conflict":
+			resp["message"] = fmt.Sprintf(
+				"已保存。检测到与 %s「%s」语义冲突（相似度%.0f%%），%s",
+				c.ConflictingID, truncStr(c.OldContent, 60),
+				c.Similarity*100, c.Resolution,
+			)
+		case "need_confirm":
+			resp["message"] = fmt.Sprintf(
+				"已保存，但检测到与 %s「%s」可能矛盾（相似度%.0f%%）。建议确认是否删除旧记忆 %s。",
+				c.ConflictingID, truncStr(c.OldContent, 60),
+				c.Similarity*100, c.ConflictingID,
+			)
+		default:
+			resp["message"] = fmt.Sprintf("已保存记忆 [%s]: %s", addResult.Entry.Topic, addResult.Entry.Content)
+		}
+	} else {
+		resp["message"] = fmt.Sprintf("已保存记忆 [%s]: %s", addResult.Entry.Topic, addResult.Entry.Content)
+	}
+
+	return resp, nil
 }
 
 // ---------- 搜索记忆工具 ----------
@@ -146,4 +179,14 @@ func formatEntries(entries []memory.Entry) string {
 	}
 	b, _ := json.MarshalIndent(results, "", "  ")
 	return string(b)
+}
+
+
+// truncStr 截断字符串到 maxRunes 长度
+func truncStr(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
 }

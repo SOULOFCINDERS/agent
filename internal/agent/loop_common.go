@@ -47,6 +47,11 @@ func (a *LoopAgent) prepareHistory(ctx context.Context, userMessage string, hist
 		}
 	}
 
+	// 置信度衰减（每次对话开始时执行，成本极低）
+	if a.memStore != nil {
+		a.memStore.DecayConfidence()
+	}
+
 	// 注入相关记忆
 	if a.memStore != nil && a.memStore.Count() > 0 {
 		memSummary := a.memStore.RelevantSummary(userMessage, 5)
