@@ -356,6 +356,20 @@ func Build(cfg Config) (*App, error) {
 	app.LoopAgent.SetContextManager(ctxMgr)
 	app.LoopAgent.SetUsageTracker(app.UsageTracker)
 
+	// 8.1 SmartManager（摘要压缩 + 强制压缩能力）
+	summarizer := ctxwindow.NewLLMSummarizer(app.LLMClient)
+	smartCtxMgr := ctxwindow.NewSmartManager(ctxwindow.SmartManagerConfig{
+		Base: ctxwindow.ManagerConfig{
+			Model:               profile,
+			ProtectRecentRounds: 2,
+			ToolResultMaxTokens: 2000,
+		},
+		Compaction: ctxwindow.DefaultCompactionConfig(),
+		Summarizer: summarizer,
+		Trace:      cfg.TraceWriter,
+	})
+	app.LoopAgent.SetSmartContextManager(smartCtxMgr)
+
 	// 9. Multi-Agent（可选）
 	if cfg.MultiAgentMode {
 		agentDefs := []multiagent.AgentDef{

@@ -87,15 +87,15 @@ func chatCmd(args []string) int {
 		sess = app.SessionManager.NewSession()
 	}
 
-	return runChatLoopWithSession(app.ChatAgent(), cfg.StreamMode, app.UsageTracker, app.SessionManager, sess, history)
+	return runChatLoopWithSession(app.ChatAgent(), app.LoopAgent, cfg.StreamMode, app.UsageTracker, app.SessionManager, sess, history)
 }
 
 // runChatLoopWithSession 带会话持久化的对话循环
-func runChatLoopWithSession(ca container.ChatAgent, streamMode bool, usageTracker *llm.UsageTracker, sessMgr *sessionPkg.Manager, sess *sessionPkg.Session, history []llm.Message) int {
+func runChatLoopWithSession(ca container.ChatAgent, loopAgent *agent.LoopAgent, streamMode bool, usageTracker *llm.UsageTracker, sessMgr *sessionPkg.Manager, sess *sessionPkg.Session, history []llm.Message) int {
 	_, _ = fmt.Fprintln(os.Stdout, "")
-	_, _ = fmt.Fprintln(os.Stdout, "╔══════════════════════════════════════════╗")
-	_, _ = fmt.Fprintln(os.Stdout, "║       🤖 Agent Chat (输入 quit 退出)      ║")
-	_, _ = fmt.Fprintln(os.Stdout, "╚══════════════════════════════════════════╝")
+	_, _ = fmt.Fprintln(os.Stdout, "╔══════════════════════════════════════════════╗")
+	_, _ = fmt.Fprintln(os.Stdout, "║  🤖 Agent Chat (quit 退出 | compact 压缩上下文) ║")
+	_, _ = fmt.Fprintln(os.Stdout, "╚══════════════════════════════════════════════╝")
 	if sess != nil {
 		_, _ = fmt.Fprintf(os.Stdout, "  📝 会话: %s\n", sess.ID)
 	}
@@ -136,6 +136,25 @@ func runChatLoopWithSession(ca container.ChatAgent, streamMode bool, usageTracke
 				sess = sessMgr.NewSession()
 			}
 			_, _ = fmt.Fprintln(os.Stdout, "🔄 对话已重置")
+			continue
+		}
+		if input == "compact" {
+			if len(history) == 0 {
+				_, _ = fmt.Fprintln(os.Stdout, "ℹ️  没有可压缩的对话历史")
+				continue
+			}
+			compacted, result, err := loopAgent.CompactHistory(context.Background(), history)
+			if err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "❌ 压缩失败: %s\n", err)
+				continue
+			}
+			history = compacted
+			_, _ = fmt.Fprintf(os.Stdout, "📦 上下文已压缩: %d→%d 条消息, %d→%d tokens, 策略: %s\n",
+				result.OriginalCount, result.FinalCount, result.TokensBefore, result.TokensAfter, result.Strategy)
+			if result.SummaryInserted {
+				_, _ = fmt.Fprintln(os.Stdout, "   ✅ 已生成对话摘要替换旧消息")
+			}
+			saveSession()
 			continue
 		}
 

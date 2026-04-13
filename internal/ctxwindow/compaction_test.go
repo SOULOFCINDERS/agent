@@ -436,6 +436,86 @@ func TestSmartFit_EndToEnd_MultiRound(t *testing.T) {
 	}
 }
 
+// ---------- ForceCompact 测试 ----------
+
+func TestForceCompact_NotOverBudget(t *testing.T) {
+	summarizer := &mockSummarizer{
+		summary: "User discussed various topics across multiple rounds.",
+	}
+	sm := newTestSmartManager(5000, summarizer)
+
+	history := buildLongHistory(6)
+
+	result := sm.ForceCompact(context.Background(), history)
+
+	if result.Strategy == "none" {
+		t.Error("ForceCompact should attempt compression even when not over budget")
+	}
+	if !result.SummaryInserted {
+		t.Error("ForceCompact should insert summary when summarizer is available and enough messages")
+	}
+	if result.FinalCount >= result.OriginalCount {
+		t.Errorf("expected fewer messages after ForceCompact: %d -> %d", result.OriginalCount, result.FinalCount)
+	}
+
+	t.Logf("ForceCompact (not over budget): %d -> %d msgs, tokens: %d -> %d, strategy=%s",
+		result.OriginalCount, result.FinalCount, result.TokensBefore, result.TokensAfter, result.Strategy)
+}
+
+func TestForceCompact_TooFewMessages(t *testing.T) {
+	summarizer := &mockSummarizer{}
+	sm := newTestSmartManager(5000, summarizer)
+
+	history := []llm.Message{
+		{Role: "system", Content: "You are helpful."},
+		{Role: "user", Content: "Hello"},
+		{Role: "assistant", Content: "Hi there!"},
+	}
+
+	result := sm.ForceCompact(context.Background(), history)
+
+	if summarizer.calls > 0 {
+		t.Error("summarizer should not be called when too few messages to summarize")
+	}
+	if result.FinalCount != result.OriginalCount {
+		t.Errorf("should not remove messages when too few: %d -> %d", result.OriginalCount, result.FinalCount)
+	}
+}
+
+func TestForceCompact_SummarizerFails(t *testing.T) {
+	summarizer := &mockSummarizer{
+		err: fmt.Errorf("LLM unavailable"),
+	}
+	sm := newTestSmartManager(5000, summarizer)
+
+	history := buildLongHistory(8)
+
+	result := sm.ForceCompact(context.Background(), history)
+
+	if !result.SummaryInserted {
+		t.Error("ForceCompact should use fallback summary when summarizer fails and SummaryFallback is true")
+	}
+	if result.FinalCount >= result.OriginalCount {
+		t.Errorf("expected fewer messages after fallback compaction: %d -> %d", result.OriginalCount, result.FinalCount)
+	}
+
+	t.Logf("ForceCompact (summarizer fail): %d -> %d msgs, strategy=%s",
+		result.OriginalCount, result.FinalCount, result.Strategy)
+}
+
+func TestForceCompact_EmptyHistory(t *testing.T) {
+	sm := newTestSmartManager(5000, &mockSummarizer{})
+
+	result := sm.ForceCompact(context.Background(), nil)
+
+	if result.Strategy != "none" {
+		t.Errorf("empty history should have strategy 'none', got %q", result.Strategy)
+	}
+	if result.OriginalCount != 0 {
+		t.Errorf("expected 0 original count, got %d", result.OriginalCount)
+	}
+}
+
 // ---------- 辅助函数 ----------
 
 func buildLongHistory(rounds int) []llm.Message {

@@ -94,6 +94,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/api/sessions/clear", s.handleClearSession)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/context", s.handleContext)
+	mux.HandleFunc("/api/compact", s.handleCompact)
 	mux.HandleFunc("/api/sessions", s.handleListSessions)
 	mux.HandleFunc("/api/sessions/rename", s.handleRenameSession)
 	mux.HandleFunc("/api/sessions/delete", s.handleDeleteSession)
@@ -362,6 +363,60 @@ func (s *Server) buildContextInfo(sessionID string) contextInfo {
 }
 
 // ---------- 会话管理 ----------
+
+// handleCompact 主动压缩指定会话的上下文
+func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.SessionID == "" {
+		writeJSON(w, 400, map[string]string{"error": "missing session_id"})
+		return
+	}
+
+	history := s.getSession(req.SessionID)
+	if len(history) == 0 {
+		writeJSON(w, 200, map[string]any{
+			"original_count":   0,
+			"final_count":      0,
+			"tokens_before":    0,
+			"tokens_after":     0,
+			"strategy":         "none",
+			"summary_inserted": false,
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	compacted, result, err := s.loopAgent.CompactHistory(ctx, history)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.setSession(req.SessionID, compacted)
+
+	writeJSON(w, 200, map[string]any{
+		"original_count":   result.OriginalCount,
+		"final_count":      result.FinalCount,
+		"tokens_before":    result.TokensBefore,
+		"tokens_after":     result.TokensAfter,
+		"strategy":         result.Strategy,
+		"summary_inserted": result.SummaryInserted,
+	})
+}
 
 func (s *Server) getSession(id string) []llm.Message {
 	if s.persistStore == nil {

@@ -429,6 +429,45 @@ func (a *LoopAgent) ContextWindowStatus(history []llm.Message) *ctxwindow.Window
 	return &s
 }
 
+// CompactHistory 主动压缩对话历史
+// 供 CLI/Web 层在用户主动触发时调用。
+// 优先使用 SmartManager.ForceCompact（含摘要），降级到 Manager.Fit（硬裁剪）。
+func (a *LoopAgent) CompactHistory(ctx context.Context, history []llm.Message) ([]llm.Message, *ctxwindow.CompactionResult, error) {
+	if a.smartCtxManager != nil {
+		result := a.smartCtxManager.ForceCompact(ctx, history)
+		a.traceLog("compact_history", map[string]any{
+			"messages_before":  result.OriginalCount,
+			"messages_after":   result.FinalCount,
+			"tokens_before":    result.TokensBefore,
+			"tokens_after":     result.TokensAfter,
+			"strategy":         result.Strategy,
+			"summary_inserted": result.SummaryInserted,
+		})
+		return result.Messages, result, nil
+	}
+
+	if a.ctxManager != nil {
+		before := len(history)
+		tokensBefore := a.ctxManager.EstimateHistory(history)
+		fitted := a.ctxManager.Fit(history)
+		tokensAfter := a.ctxManager.EstimateHistory(fitted)
+		result := &ctxwindow.CompactionResult{
+			Messages:      fitted,
+			OriginalCount: before,
+			FinalCount:    len(fitted),
+			TokensBefore:  tokensBefore,
+			TokensAfter:   tokensAfter,
+			Strategy:      "truncate",
+		}
+		if before == len(fitted) {
+			result.Strategy = "none"
+		}
+		return fitted, result, nil
+	}
+
+	return nil, nil, fmt.Errorf("no context manager available for compaction")
+}
+
 // InjectToolDefs 注入额外的工具定义（用于 Multi-Agent handoff 等场景）
 // 这些工具已在 registry 中注册，但 schema 不在 BuiltinSchemas 中，
 // 需要外部手动提供 ToolDef。

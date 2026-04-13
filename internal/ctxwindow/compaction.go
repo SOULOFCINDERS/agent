@@ -192,6 +192,77 @@ func (sm *SmartManager) SmartFit(ctx context.Context, history []llm.Message) *Co
 	return result
 }
 
+// ForceCompact 强制压缩：无论是否超标都执行完整的三阶段压缩流程
+//
+// 与 SmartFit 的区别：跳过 NeedsTruncation 前置检查，始终尝试压缩。
+// 用于用户主动触发上下文压缩的场景。
+//
+// 流程：
+//  1. Phase 0: 截断超长工具结果
+//  2. Phase 1: 摘要压缩（如果启用且有 Summarizer）
+//  3. Phase 2: 硬裁剪（如果仍超标）
+func (sm *SmartManager) ForceCompact(ctx context.Context, history []llm.Message) *CompactionResult {
+	result := &CompactionResult{
+		OriginalCount: len(history),
+		TokensBefore:  sm.EstimateHistory(history),
+		Strategy:      "none",
+	}
+
+	if len(history) == 0 {
+		result.Messages = history
+		return result
+	}
+
+	sm.traceLog("force_compact_start", map[string]any{
+		"messages": len(history),
+		"tokens":   result.TokensBefore,
+		"budget":   sm.config.MaxInputTokens,
+	})
+
+	working := make([]llm.Message, len(history))
+	copy(working, history)
+
+	// Phase 0: 截断超长工具结果
+	working = sm.truncateLongToolResults(working)
+	truncated := sm.EstimateHistory(working) < result.TokensBefore
+
+	// Phase 1: 摘要压缩
+	if sm.summarizer != nil && sm.compaction.EnableSummary {
+		summarized, ok := sm.trySummarize(ctx, working)
+		if ok {
+			working = summarized
+			result.SummaryInserted = true
+			result.Strategy = "summary"
+		}
+	}
+
+	if result.Strategy == "none" && truncated {
+		result.Strategy = "truncate"
+	}
+
+	// Phase 2: 硬裁剪（如果仍超标）
+	if sm.needsTruncationForSlice(working) {
+		working = sm.Fit(working)
+		if result.Strategy == "summary" {
+			result.Strategy = "summary+truncate"
+		} else {
+			result.Strategy = "truncate"
+		}
+	}
+
+	result.Messages = working
+	result.FinalCount = len(working)
+	result.TokensAfter = sm.EstimateHistory(working)
+
+	sm.traceLog("force_compact_done", map[string]any{
+		"messages_after": result.FinalCount,
+		"tokens_after":   result.TokensAfter,
+		"strategy":       result.Strategy,
+	})
+
+	return result
+}
+
 // PreCheck LLM 调用前的预检裁剪
 // 与 SmartFit 相同逻辑，但语义上明确是"调用前检查"
 // 返回裁剪后的 history，可直接传给 LLM
